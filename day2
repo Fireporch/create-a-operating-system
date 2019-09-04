@@ -2,5 +2,54 @@
 %计算机读写时检查第一个扇区最后两个字节是否为0x55AA，故认为第一个扇区开头是启动程序
 %继续编写系统，先下载了一个文本编译器
 
+;hello-os
+;TAB=4
 
+		ORG 0x7c00 		;指明程序装载地址
+;以下的记述用于标准的FAT12格式的软盘
+	JMP 	entry ;JMP用于跳转，entry是标签的声明，表示jump to entry跳到入口
+	DB 0x90
+
+
+
+	;程序核心
+entry：
+		MOV AX,0		;初始化寄存器
+		MOV SS,AX
+		MOV SP,0x7c00
+		MOV DS,AX
+		MOV ES,AX
+
+		MOV SI,msg
+	putloop:
+		MOV AL,[SI]
+		ADD SI,1
+		CMP AL,0
+
+		JE fin
+		MOV AH,0x0e;
+		MOV BX,15
+		INT 0x10
+		JMP putloop
+	fun:
+		HLT;
+		JMP fin;
+	msg:
+		DB 0x0a,0x0a	;换行两次
+		DB "hello,world"
+		DB 0x0a			;换行
+		DB 0
+;JMP用于跳转，entry是标签的声明，表示jump to entry跳到入口
 ;ORG这个指令会告诉nask，在开始执行时，机器语言应该在内存中的位置
+;这一堆的MOV表示赋值，比如MOV A,0相当于A=0
+;AX————accumulator，累加寄存器
+;cx————counter ,记数寄存器
+;dx————data ,数据寄存器
+;bx————base,基址寄存器
+;sp————stack pointer,栈指针寄存器
+;BP————base pointer,基址指针寄存器
+;SI————source index,源变址寄存器
+;DI————destination index,目的变址寄存器
+
+;上述16位寄存器来存储二进制数，能存exp（2,16）个数
+;因此ADD AX，0x1234编译成81 c1 34 12
