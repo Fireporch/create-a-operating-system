@@ -1,0 +1,172 @@
+分割源文件
+bootpack.c ->  graphic.c 关于绘画的处理
+           -> dectbl.c   关于gdt，idt等descriptor table的处理
+           -> bootpack.c 其他处理
+ 分割关键是如果分割的文件中其他文件也要使用在naskgunc.nas中的函数，要重新声明
+ 
+ 分割C后还要改makefile ，修改初始翻译过程
+ 
+ 进一步改正，上面的源文件都要声明 void io_out8(int port ,int data);
+ 将重复部分丢掉，将这些全局部分的，对函数的申明的部分合并到一个bootpack.h文件中，在编译garphic.c之前先编译bootpack.h就能减少代码的冗余
+ 
+具体做法师在其脚本前加#include bootpack.h
+
+
+然后处理昨天对鼠标pic未完成的部分变量进行初始化定义并讲解其原理
+最后整合到init_pic函数中
+
+对鼠标内容的输入时IRQ12，键盘是IRQ1 所以我们编写了用于int 0x2c 与int 0x21的重担处理程序（handleer）即中断发生时所要调用的程序
+
+
+对中断程序的描述具体回填此时不做阐述
+——————————————————————————————————————
+ok现在对鼠标与键盘通过几个中断程序（C函数与nas文件的修改），实现鼠标与键盘在操作系统上的输入
+
+
+但是实际仅仅设置中断还是不能实现鼠标的改变
+
+我们要对int.c的inthandler21函数修改让他对中断程序作出回应通过inthandler21程序对执行中断程序的相关变量通知，对即将发生的事物进行处理
+io_out8(PIC0_OCW2, 0x61);这句话就是用来通知pic已知要发生IRQ1中断了，（同理，如果要发生其他中断，修改0x61即可）
+将0x60+IRQ号码输入给ocw2即可告知pic，即将发生的中断，并使程序对来自键盘的指令进行交互
+函数如下：
+void inthandler21(int *esp)
+{
+	struct BOOTINFO *binfo = (struct BOOTINFO *) ADR_BOOTINFO;
+	unsigned char data, s[4];
+	io_out8(PIC0_OCW2, 0x61);	/* IRQ-01庴晅姰椆傪PIC偵捠抦 */
+	data = io_in8(PORT_KEYDAT);
+
+	sprintf(s, "%02X", data);
+	boxfill8(binfo->vram, binfo->scrnx, COL8_008484, 0, 16, 15, 31);
+	putfonts8_asc(binfo->vram, binfo->scrnx, 0, 16, COL8_FFFFFF, s);
+
+	return;
+}
+
+但是这样只能进行一次中断（因为没循环/笑）
+
+
+所以对中断的处理要保证可重读，那么我们先把案件的剑麻首存到变量中（定义一个keybuf结构体来对建与码匹配）
+
+struct KEYBUF{
+  unsigned char data ,flag;
+};
+#defined PORT_KEYDAT 0x0060
+
+struct KETBUF keybuf;
+
+
+
+void inthandler21(int *esp)
+{
+	unsigned char data;
+	io_out8(PIC0_OCW2, 0x61);	/* 通知IRQ-01已经受理完 */
+	data = io_in8(PORT_KEYDAT);
+	if (keybuf.flag == 0) {
+		keybuf.data = data;
+		keybuf.flag = 1;
+	}
+	return;
+}
+
+我们完成了上面的程序，struct结构体用于缓存键盘输入的数据，flag用于判定这个缓冲区是否有数据，
+
+存在一个问题如果此时键盘有数据，但是同时又来一个中断则将这个数据扔掉
+
+还要对bootpack.c中的hariMain函数的那个无限循环进行修改
+for (;;) {
+		io_cli();
+		if (keybuf.flag == 0) {
+			io_stihlt();
+		} else {
+			i = keybuf.data;
+			keybuf.flag = 0;
+			io_sti();
+			sprintf(s, "%02X", i);
+			boxfill8(binfo->vram, binfo->scrnx, COL8_008484, 0, 16, 15, 31);
+			putfonts8_asc(binfo->vram, binfo->scrnx, 0, 16, COL8_FFFFFF, s);
+		}
+	}
+先用io_cli指令屏蔽中断（让cli指令屏蔽系统其它操作带来的干扰）
+，然后访问ketbuf这个量，看看现在是否有数据，如果没有数据执行io_hlt(又因为cli屏蔽了中断，所以cli与hlt同时执行就是stihlt指令）
+
+//这里讲一下stihlt的作用，这个指令会先执行hlt指令，如果收到了pic的通知，cpu就被唤醒执行中断处理程序了，执行完一次中断后回到for开头执行io_cli函数
+
+如果访问ketbuf变量时，keybuf内已经有变量，先将其存入i中然后清空keybuf的值，修改flag并通过io_sit执行一次中断，然后返回for函数开头
+
+
+这样就能保证无论开始的keybuf内是否有值，都能通过keybuf内的值来执行一次中断返回不同的结果了
+
+然后执行程序，发现程序无法对同时多个输入进行处理
+此时我们舍弃原有的keybuf这个区作为缓冲区，开发一个FIFO缓冲区
+首先是结构体
+struct{
+  unsigned char data[32];
+  int next;
+};
+修改for循环
+for (;;) {
+		io_cli();
+		if (fifo8_status(&keyfifo) == 0) {
+			io_stihlt();
+		} else {
+			i = fifo8_get(&keyfifo);
+			io_sti();
+			sprintf(s, "%02X", i);
+			boxfill8(binfo->vram, binfo->scrnx, COL8_008484, 0, 16, 15, 31);
+			putfonts8_asc(binfo->vram, binfo->scrnx, 0, 16, COL8_FFFFFF, s);
+		}
+	}
+
+让他判定是否有数据是通过next判定的，然后读数据
+
+我们设计一个fofi缓冲区，一次最多能存放32个数据，把这个FIFO数据缓冲区设定为一个环形结构，当数据存储满后，（比如到32移位接到0开始）
+所以，这样的环形结构就需要两个next标注 左r ，右l，总个数len
+同时那个无限循环的判别， inthandler对变量的读取都要修改
+
+
+
+
+然后就是整理上面所有写过的关于对这个缓冲区的定义，初始化，读取的修改，把他们合并到一个叫FIFO的变量中
+struct FIFO8{
+    unsigned char *buf；
+    int p ,q ,size ,free,flags;
+}
+void fifo_init (struct FIFO8 *fifo,int size ,unsigned char *buf)
+{
+  fifo->size=size;
+  fifo->buf=buf;
+  fifo->free=free;
+  fifo->flags=0;
+  fifo->p=0;
+  fifo->q=0;
+  return;
+}
+
+#define FLAGS_OVERRUN 0x0001
+//写数据
+int fifo8_put(struct FIFO8 *fifo ,unsigned char data){
+}
+//读数据
+init fifo8_get(struct FIFO8*fifo){
+}
+//表明数据的个数
+int dido8_status(struct FIFO8* fifo){}
+
+然后int。c里面对缓冲区的读写就很简单了
+具体就是
+struct FIFO8 keyfifo;
+void inthandler21(int *esp)
+{
+unsigned char data;
+io_out8(PIC0_OCW2, 0x61);
+data=io_in8(PORT_KEYDAT);
+fifo_put(&ketfifo,data);
+return;
+}
+
+
+
+mariMain函数具体修改也是改一下申请的变量名，改一下判断的条件就ok
+if（fifo8_satus(&keyfifo）==0)
+读到的数就是i=fifo8_get(&keyfifo);
