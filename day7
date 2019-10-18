@@ -37,5 +37,211 @@ for（ ; ; ）
 然后调实代码，回顾代码的作用
 
 
+通过对鼠标实现三个字符创输出后，我们还要在hairmain上对其输出做一些调整，首先是输出的首个字符
+我们将是否单机鼠标键位设定为大写，后两位代指鼠标的位置，并且设定一个函数体来存放于记录这些数据
 
 
+
+
+然后我们将鼠标位置与对应的字符匹配，实现鼠标在中断程序下的连续中断，造成实际位置的改变（就是让鼠标动起来）
+
+					mx += mdec.x;
+					my += mdec.y;
+					if (mx < 0) {
+						mx = 0;
+					}
+					if (my < 0) {
+						my = 0;
+					}
+					if (mx > binfo->scrnx - 16) {
+						mx = binfo->scrnx - 16;
+					}
+					if (my > binfo->scrny - 16) {
+						my = binfo->scrny - 16;
+					}
+
+——————————————————————————————————————————————————————————————————————————————————————————————————————————————
+
+最终bookkpack.c的总体代码如下：
+/* bootpack偺儊僀儞 */
+
+#include "bootpack.h"
+#include <stdio.h>
+
+struct MOUSE_DEC {
+	unsigned char buf[3], phase;
+	int x, y, btn;
+};
+
+extern struct FIFO8 keyfifo, mousefifo;
+void enable_mouse(struct MOUSE_DEC *mdec);
+void init_keyboard(void);
+int mouse_decode(struct MOUSE_DEC *mdec, unsigned char dat);
+
+void HariMain(void)
+{
+	struct BOOTINFO *binfo = (struct BOOTINFO *) ADR_BOOTINFO;
+	char s[40], mcursor[256], keybuf[32], mousebuf[128];
+	int mx, my, i;
+	struct MOUSE_DEC mdec;
+
+	init_gdtidt();
+	init_pic();
+	io_sti(); /* IDT/PIC偺弶婜壔偑廔傢偭偨偺偱CPU偺妱傝崬傒嬛巭傪夝彍 */
+	fifo8_init(&keyfifo, 32, keybuf);
+	fifo8_init(&mousefifo, 128, mousebuf);
+	io_out8(PIC0_IMR, 0xf9); /* PIC1偲僉乕儃乕僪傪嫋壜(11111001) */
+	io_out8(PIC1_IMR, 0xef); /* 儅僂僗傪嫋壜(11101111) */
+
+	init_keyboard();
+
+	init_palette();
+	init_screen8(binfo->vram, binfo->scrnx, binfo->scrny);
+	mx = (binfo->scrnx - 16) / 2; /* 夋柺拞墰偵側傞傛偆偵嵗昗寁嶼 */
+	my = (binfo->scrny - 28 - 16) / 2;
+	init_mouse_cursor8(mcursor, COL8_008484);
+	putblock8_8(binfo->vram, binfo->scrnx, 16, 16, mx, my, mcursor, 16);
+	sprintf(s, "(%3d, %3d)", mx, my);
+	putfonts8_asc(binfo->vram, binfo->scrnx, 0, 0, COL8_FFFFFF, s);
+
+	enable_mouse(&mdec);
+
+	for (;;) {
+		io_cli();
+		if (fifo8_status(&keyfifo) + fifo8_status(&mousefifo) == 0) {
+			io_stihlt();
+		} else {
+			if (fifo8_status(&keyfifo) != 0) {
+				i = fifo8_get(&keyfifo);
+				io_sti();
+				sprintf(s, "%02X", i);
+				boxfill8(binfo->vram, binfo->scrnx, COL8_008484,  0, 16, 15, 31);
+				putfonts8_asc(binfo->vram, binfo->scrnx, 0, 16, COL8_FFFFFF, s);
+			} else if (fifo8_status(&mousefifo) != 0) {
+				i = fifo8_get(&mousefifo);
+				io_sti();
+				if (mouse_decode(&mdec, i) != 0) {
+					/* 僨乕僞偑3僶僀僩懙偭偨偺偱昞帵 */
+					sprintf(s, "[lcr %4d %4d]", mdec.x, mdec.y);
+					if ((mdec.btn & 0x01) != 0) {
+						s[1] = 'L';
+					}
+					if ((mdec.btn & 0x02) != 0) {
+						s[3] = 'R';
+					}
+					if ((mdec.btn & 0x04) != 0) {
+						s[2] = 'C';
+					}
+					boxfill8(binfo->vram, binfo->scrnx, COL8_008484, 32, 16, 32 + 15 * 8 - 1, 31);
+					putfonts8_asc(binfo->vram, binfo->scrnx, 32, 16, COL8_FFFFFF, s);
+					/* 儅僂僗僇乕僜儖偺堏摦 */
+					boxfill8(binfo->vram, binfo->scrnx, COL8_008484, mx, my, mx + 15, my + 15); /* 儅僂僗徚偡 */
+					mx += mdec.x;
+					my += mdec.y;
+					if (mx < 0) {
+						mx = 0;
+					}
+					if (my < 0) {
+						my = 0;
+					}
+					if (mx > binfo->scrnx - 16) {
+						mx = binfo->scrnx - 16;
+					}
+					if (my > binfo->scrny - 16) {
+						my = binfo->scrny - 16;
+					}
+					sprintf(s, "(%3d, %3d)", mx, my);
+					boxfill8(binfo->vram, binfo->scrnx, COL8_008484, 0, 0, 79, 15); /* 嵗昗徚偡 */
+					putfonts8_asc(binfo->vram, binfo->scrnx, 0, 0, COL8_FFFFFF, s); /* 嵗昗彂偔 */
+					putblock8_8(binfo->vram, binfo->scrnx, 16, 16, mx, my, mcursor, 16); /* 儅僂僗昤偔 */
+				}
+			}
+		}
+	}
+}
+
+#define PORT_KEYDAT				0x0060
+#define PORT_KEYSTA				0x0064
+#define PORT_KEYCMD				0x0064
+#define KEYSTA_SEND_NOTREADY	0x02
+#define KEYCMD_WRITE_MODE		0x60
+#define KBC_MODE				0x47
+
+void wait_KBC_sendready(void)
+{
+	/* 僉乕儃乕僪僐儞僩儘乕儔偑僨乕僞憲怣壜擻偵側傞偺傪懸偮 */
+	for (;;) {
+		if ((io_in8(PORT_KEYSTA) & KEYSTA_SEND_NOTREADY) == 0) {
+			break;
+		}
+	}
+	return;
+}
+
+void init_keyboard(void)
+{
+	/* 僉乕儃乕僪僐儞僩儘乕儔偺弶婜壔 */
+	wait_KBC_sendready();
+	io_out8(PORT_KEYCMD, KEYCMD_WRITE_MODE);
+	wait_KBC_sendready();
+	io_out8(PORT_KEYDAT, KBC_MODE);
+	return;
+}
+
+#define KEYCMD_SENDTO_MOUSE		0xd4
+#define MOUSECMD_ENABLE			0xf4
+
+void enable_mouse(struct MOUSE_DEC *mdec)
+{
+	/* 儅僂僗桳岠 */
+	wait_KBC_sendready();
+	io_out8(PORT_KEYCMD, KEYCMD_SENDTO_MOUSE);
+	wait_KBC_sendready();
+	io_out8(PORT_KEYDAT, MOUSECMD_ENABLE);
+	/* 偆傑偔偄偔偲ACK(0xfa)偑憲怣偝傟偰偔傞 */
+	mdec->phase = 0; /* 儅僂僗偺0xfa傪懸偭偰偄傞抜奒 */
+	return;
+}
+
+int mouse_decode(struct MOUSE_DEC *mdec, unsigned char dat)
+{
+	if (mdec->phase == 0) {
+		/* 儅僂僗偺0xfa傪懸偭偰偄傞抜奒 */
+		if (dat == 0xfa) {
+			mdec->phase = 1;
+		}
+		return 0;
+	}
+	if (mdec->phase == 1) {
+		/* 儅僂僗偺1僶僀僩栚傪懸偭偰偄傞抜奒 */
+		if ((dat & 0xc8) == 0x08) {
+			/* 惓偟偄1僶僀僩栚偩偭偨 */
+			mdec->buf[0] = dat;
+			mdec->phase = 2;
+		}
+		return 0;
+	}
+	if (mdec->phase == 2) {
+		/* 儅僂僗偺2僶僀僩栚傪懸偭偰偄傞抜奒 */
+		mdec->buf[1] = dat;
+		mdec->phase = 3;
+		return 0;
+	}
+	if (mdec->phase == 3) {
+		/* 儅僂僗偺3僶僀僩栚傪懸偭偰偄傞抜奒 */
+		mdec->buf[2] = dat;
+		mdec->phase = 1;
+		mdec->btn = mdec->buf[0] & 0x07;
+		mdec->x = mdec->buf[1];
+		mdec->y = mdec->buf[2];
+		if ((mdec->buf[0] & 0x10) != 0) {
+			mdec->x |= 0xffffff00;
+		}
+		if ((mdec->buf[0] & 0x20) != 0) {
+			mdec->y |= 0xffffff00;
+		}
+		mdec->y = - mdec->y; /* 儅僂僗偱偼y曽岦偺晞崋偑夋柺偲斀懳 */
+		return 1;
+	}
+	return -1; /* 偙偙偵棃傞偙偲偼側偄偼偢 */
+}
