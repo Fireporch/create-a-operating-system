@@ -1,0 +1,168 @@
+内存管理
+数据处理中的向上取整与向下去整：
+#day 5
+对数据去整操作
+int memman_free_4k(struct MEMMAN *man ,unsigned int addr ,unsigned int sign)
+{
+	int i;
+	size =(size +0xfff)&0xfffff000;
+	i= memman_free (man,addr,size );
+	return i;
+}
+
+
+然后我们开始解决鼠标的图形叠加问题：
+通过建立sheet.c，定义一个结构体
+sturct SHEET{
+	unsigned char *buf;
+	int bxsize,bysize,vx0,vy0,col_int,height,flags;
+};设定一个透明的图层，它在与其他图层冲突时，会像两个网页一样叠加在两者之上而不是覆盖
+然后我们在创建一个能管理他的结构体
+struct SHTCTL{
+	unsined chat *varm;
+	int xsize ,ysize,top;
+	struct SHEET *sheets[MAX_SHEETS];
+	struct SHEET sheets0[MAX_SHEETS];
+};
+
+//然后我们用memman_alloc_4k来分配用于记忆图层的控制变量的内存空间，通过sizeof指定空间的大小并未所有指定出的内存定义上未使用的标签
+struct SHTCTL *shtctl_init(struct MEMMAN *memman, unsigned char *vram, int xsize, int ysize)
+{
+	struct SHTCTL *ctl;
+	int i;
+	ctl = (struct SHTCTL *) memman_alloc_4k(memman, sizeof (struct SHTCTL));
+	if (ctl == 0) {
+		goto err;
+	}
+	ctl->vram = vram;
+	ctl->xsize = xsize;
+	ctl->ysize = ysize;
+	ctl->top = -1; /* 僔乕僩偼堦枃傕側偄 */
+	for (i = 0; i < MAX_SHEETS; i++) {
+		ctl->sheets0[i].flags = 0; /* 枹巊梡儅乕僋 */
+	}
+err:
+	return ctl;
+}
+
+
+//获取新生成的并未被使用的标签
+
+struct SHEET *sheet_alloc(struct SHTCTL *ctl)
+{
+	struct SHEET *sht;
+	int i;
+	for (i = 0; i < MAX_SHEETS; i++) {
+		if (ctl->sheets0[i].flags == 0) {
+			sht = &ctl->sheets0[i];
+			sht->flags = SHEET_USE; /* 巊梡拞儅乕僋 */
+			sht->height = -1; /* 旕昞帵拞 */
+			return sht;
+		}
+	}
+	return 0;	/* 慡偰偺僔乕僩偑巊梡拞偩偭偨 */
+}//通过遍历操作找到所有未使用的，找到了就标记并返回找到的地址
+
+void sheet_setbuf设定图层缓冲却的大小与颜色
+void sheet_updown设定底板高度并对高度进行排列，并通过排列好的高度对各个图层排列并通过调用refresh进行实时刷新
+void sheet_refresh就是一个酸辛函数，调用的当前图层设定好刷新频次
+void sheet_slide设定图层的移动（不改变高度）
+void sheet_free释放图层
+并在harimain函数中重写即可实现同时展开多个图形而不会覆盖的情况了
+
+
+具体修改：
+
+// last main
+
+	struct BOOTINFO *binfo = (struct BOOTINFO *) ADR_BOOTINFO;
+	char s[40], keybuf[32], mousebuf[128];
+	int mx, my, i;
+	unsigned int memtotal;
+	struct MOUSE_DEC mdec;
+	struct MEMMAN *memman = (struct MEMMAN *) MEMMAN_ADDR;
+	
+//增加对sheet两个结构体的实例化，并对mouse与back的缓冲区定义
+	struct SHTCTL *shtctl;
+	struct SHEET *sht_back, *sht_mouse;
+	unsigned char *buf_back, buf_mouse[256];
+//fifo缓存区初始化以保证能实时接收键盘鼠标的输入
+	init_gdtidt();
+	init_pic();
+	io_sti(); /* IDT/PIC偺弶婜壔偑廔傢偭偨偺偱CPU偺妱傝崬傒嬛巭傪夝彍 */
+	fifo8_init(&keyfifo, 32, keybuf);
+	fifo8_init(&mousefifo, 128, mousebuf);
+	io_out8(PIC0_IMR, 0xf9); /* PIC1偲僉乕儃乕僪傪嫋壜(11111001) */
+	io_out8(PIC1_IMR, 0xef); /* 儅僂僗傪嫋壜(11101111) */
+
+	init_keyboard();
+	enable_mouse(&mdec);
+	memtotal = memtest(0x00400000, 0xbfffffff);
+	memman_init(memman);
+	memman_free(memman, 0x00001000, 0x0009e000); /* 0x00001000 - 0x0009efff */
+	memman_free(memman, 0x00400000, memtotal - 0x00400000);
+
+	init_palette();
+	init_screen8(buf_back, binfo->scrnx, binfo->scrny);
+	init_mouse_cursor8(buf_mouse, 99);
+	mx = (binfo->scrnx - 16) / 2; /* 夋柺拞墰偵側傞傛偆偵嵗昗寁嶼 */
+	my = (binfo->scrny - 28 - 16) / 2;
+
+	sprintf(s, "(%3d, %3d)", mx, my);
+	putfonts8_asc(buf_back, binfo->scrnx, 0, 0, COL8_FFFFFF, s);
+	sprintf(s, "memory %dMB   free : %dKB",
+			memtotal / (1024 * 1024), memman_total(memman) / 1024);
+	putfonts8_asc(buf_back, binfo->scrnx, 0, 32, COL8_FFFFFF, s);
+	//新增sheet接管mouse的图层显示，因此扇区putlock8_8对鼠标指针的显示
+
+
+	shtctl = shtctl_init(memman, binfo->vram, binfo->scrnx, binfo->scrny);
+	sht_back  = sheet_alloc(shtctl);
+	sht_mouse = sheet_alloc(shtctl);
+	buf_back  = (unsigned char *) memman_alloc_4k(memman, binfo->scrnx * binfo->scrny);
+	sheet_setbuf(sht_back, buf_back, binfo->scrnx, binfo->scrny, -1);
+	 /* 初始化各项参数并定义好每一个图层的实际大小 */
+	sheet_setbuf(sht_mouse, buf_mouse, 16, 16, 99);
+	
+	sheet_slide(shtctl, sht_back, 0, 0);
+	sheet_slide(shtctl, sht_mouse, mx, my);
+	sheet_updown(shtctl, sht_back,  0);
+	sheet_updown(shtctl, sht_mouse, 1);
+	sheet_refresh(shtctl);
+
+
+
+
+	不过实际运行中这个图层每次的刷新都要闪烁一下，影响很差，通过提高叠加处理速度解决这个
+void sheet_refreshsub (struct SHCTL *ctl1,int vx0, int vy0,int vx1,int vy1)
+{
+	int h, bx, by, vx, vy, bx0, by0, bx1, by1;
+	unsigned char *buf, c, *vram = ctl->vram;
+	struct SHEET *sht;
+	for (h = 0; h <= ctl->top; h++) {
+		sht = ctl->sheets[h];
+		buf = sht->buf;
+		/* vx0乣vy1傪巊偭偰丄bx0乣by1傪媡嶼偡傞 */
+		bx0 = vx0 - sht->vx0;
+		by0 = vy0 - sht->vy0;
+		bx1 = vx1 - sht->vx0;
+		by1 = vy1 - sht->vy0;
+		if (bx0 < 0) { bx0 = 0; }
+		if (by0 < 0) { by0 = 0; }
+		if (bx1 > sht->bxsize) { bx1 = sht->bxsize; }
+		if (by1 > sht->bysize) { by1 = sht->bysize; }
+		for (by = by0; by < by1; by++) {
+			vy = sht->vy0 + by;
+			for (bx = bx0; bx < bx1; bx++) {
+				vx = sht->vx0 + bx;
+				c = buf[by * sht->bxsize + bx];
+				if (c != sht->col_inv) {
+					vram[vy * ctl->xsize + vx] = c;
+				}
+			}
+		}
+	}
+	return;	
+}
+//即通过每次刷新刷新的区域仅仅限制在移动的区域里面而不是整个屏幕，即通过vx，vy来限制刷新的区域来实现效率的增加
+而每次刷新区域的计算，其实是重叠的那一部分才要刷新，没重叠不用刷新，通过减法即可判定出那一部分要刷新
