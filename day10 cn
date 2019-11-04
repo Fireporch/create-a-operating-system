@@ -1,0 +1,108 @@
+day10 continue
+试着做一个更灵活的窗口，丰富灵活性————————计数窗口吧
+counter具体修改图形的主函数即可实现，
+void hairmain{
+	//在图层创建开始
+	/*
+	shtctl = shtctl_init(memman, binfo->vram, binfo->scrnx, binfo->scrny);
+
+	*//
+	buf_win=(unisgened char *)memman_alloc_4k(memman,160*52);
+	//通过调用上面的shtctl创建好的memman图层框架生成一个buf_win并定义图层大小
+	make_window8(buf_win,160,52,"counter");//创造一个名为counter的新窗格
+
+
+	for(;;){
+	count++;//连续加
+	sprintf(s,"%010d",count);
+	boxfill8(buf_win,160,COL8_C6C6C6,40,28,119,43);
+	putfonts8_asc(buf_win,160,40,20,COL8_C6C6C6,s);
+
+	sheet_refresh(sht_win,40,20,120,44);
+
+	}
+}
+在实际运行中，count一直闪烁，因为在书信中，先刷新背景再刷新窗口，因此，消除闪烁，（猜想是对一部分背景停止刷新）
+
+实际只要保证有部分在另一部分之上则刷新（背景只对窗体被覆盖部分不刷新，设置刷新范围）
+实践：
+首先是sheet.c中背景刷新函数sheet_refreshsub，在刷新的for中家兔参数h0
+在图层管理函数中添加一个类似记录图层位置（在第几层）的变量
+	refresh
+
+if(sht->height>=0){
+	sheet_refreshsub(sht->ctl,sht->vx0+bx0,sht->vy0+by0,sht->vx0+bx1,sht->vy0+by1,sht->height);
+	}
+
+	sheet_slide
+在图层刷新中增加图层位置height变量，初始设为0
+sheet——refreshsub(sht->ctl,vx0,vy0,vx0+sht->bxsize,vy0+sht->bysize,sht->height);
+	
+	updown
+图层位置调整后刷新背景
+sheet_refreshsub(ctl,sht->vx0,sht->vx0+sht->bxsize,sht->vy0+sht->bysize,height+1);
+当图层位置减少后，最上方的height也减少
+sheet_refreshsub(ctl,sht->vx0,sht->vx0+sht->bxsize,sht->vy0+sht->bysize,0);
+
+
+增设对图层最上方内容才刷新后，闪烁问题在图层上消失了，但是鼠标作为始终处于最上层的图层，应该是始终不随其闪烁的，所以我们应该开辟一块新的内存显示图层的具体方位
+
+
+
+首先是 结构体中
+struct shtctl{
+	unsigned char *varm,*map;
+	int xsize,ysize,top;
+	struct SHEET *sheets[MAX_SHEETS];
+	struct SHEET sheets0[MAX_SHEETS];
+};
+然后是结构体的初始化函数
+sheet_init(..){
+	..
+	在varm定义之前（或之后）
+	ctl->map={unsigned char *}meman_alloc_4k(memman ,xsize *ysize);
+	if (ctl->map ==0){
+		memman_free_4k(memman,{int}clt,sizeof(struct SHTCTL));
+		goto err;
+	}
+	..定义varm
+}
+map定义后装载图层1,2的号码函数
+void sheet_refreshmap(struct SHTCTL *ctl,int vx0,int vy0,int vx1,int vy1,int h0){
+	int h,bx,vx,vy,bx0,by0,bx1,by1;
+	unsigned char *buf,sid,*map=ctl->map;
+	struct SHEET *sht;
+	if(vx0<0) vx0=0;
+	if(vy0<0) vy0=0;
+	if(vx1>ctl->xsize) vx1=ctl->xsize;
+	if(vy1>ctl->ysize) vy1=ctl->ysize;
+	for (h=h0;h<=ctl->top;h++){
+		sht =ctl->sheets[h];
+		sid=sht-ctl->sheets0;
+		buf =sht->buf;
+		bx0=vx0-sht->vx0;
+		bx0=vx0-sht->vy0;
+		bx1=vx1-sht->vx0;
+		by1=vy1-sht->vy0;
+		if(vx0<0) vx0=0;
+		if(vy0<0) vy0=0;
+		if(vx1>ctl->xsize) vx1=ctl->xsize;
+		if(vy1>ctl->ysize) vy1=ctl->ysize;
+		for(by=by0;by<by1;by++){
+			vy=sht->vy0+by;
+			for(bx=bx0;bx<bx1;bx++){
+				vx=sht->vx0+bx;
+				if(buf[by*sht->bxsize+bx]!=sht->col_inv){
+					map[vy*ctl->xsize+vx]=sid;
+				}
+			}
+		}
+	}
+	return;
+}//跟那个refreshsub基本类似，用色号代替图层号码，图层号码的变量时sid
+
+然后我们对refreshsub函数进行修改使其可以嵌套map
+并且修改sheet相关的updown，refresh函数使其刷新图层时按照map的图层调用顺序刷新
+基本就是用到refreshsub的刷新都要加上refreshmap
+
+
