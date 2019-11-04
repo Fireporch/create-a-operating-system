@@ -1,0 +1,85 @@
+day 10
+1.鼠标显示问题
+使鼠标能在操作系统界面之外隐藏
+					if (mx > binfo->scrnx - 16) {
+						mx = binfo->scrnx - 16;
+					}
+					if (my > binfo->scrny - 16) {
+						my = binfo->scrny - 16;
+					}
+修整为
+if( mx > binfo->scrnx-1){
+	mx = binfo->scrnx-1;
+}
+if( my > binfo->scrnx-1){
+	my = binfo->scrnx-1;
+}
+这样会导致鼠标移出图层后鼠标的填充，所以保证sheet_refreshsub函数做图层内容写入vram
+修改sheet.c
+
+在void sheet_refreshsub函数添加超出界面的修整部分
+int h, bx, by, vx, vy, bx0, by0, bx1, by1;
+	unsigned char *buf, c, *vram = ctl->vram;
+	struct SHEET *sht;
+	/* refresh超出部分修整 */
+	if (vx0 < 0) { vx0 = 0; }
+	if (vy0 < 0) { vy0 = 0; }
+	if (vx1 > ctl->xsize) { vx1 = ctl->xsize; }
+	if (vy1 > ctl->ysize) { vy1 = ctl->ysize; }
+	保证鼠标在图层显示的时候越界自动调整
+ok鼠标整合完毕
+
+修改原图层显示相关函数
+2.整合图层显示相关函数
+void sheet_updown(struct SHTCTL *ctl, struct SHEET *sht, int height);
+void sheet_refresh(struct SHTCTL *ctl, struct SHEET *sht, int bx0, int by0, int bx1, int by1);
+void sheet_slide(struct SHTCTL *ctl, struct SHEET *sht, int vx0, int vy0);
+void sheet_free(struct SHTCTL *ctl, struct SHEET *sht);
+这是sheet.c中对图层每次添加刷新位置的相关函数，但是每次对图层进行操作时都要指定好
+ctl----SHTCTL结构体，还要用到sht----SHEET结构体，所以我们将两个结构体组合
+首先在sht中定义
+struct SHEET{
+	unsigned char *buf;
+	int bxsize,bysize,vx0,vy0,col_inv,height,dlags;
+	struct SHTCTL *ctl;
+}
+并在shtctl_init中定义好ctl的初始化变量,然后就是各个函数的修改，这样在传递参数的时候仅需传递一个结构体即可，定义好了，就是修改实际的在主函数hairmain中的使用了
+
+修改完毕make run
+
+3.接下来我们做图层架构
+首先跟制作背景一样，制作出貌似窗口的图形并通过以前的boxfill8函数对窗格进行显示
+void make_window8(unsigned char *buf,int xsize,int ysize,char *title){
+	static char closebrn[14][16]={
+	'''''''
+	}
+	int x,y;
+	char c;
+	boxfill8.....
+	.....
+	putfont8_asc..
+	for(y=0;y<14;y++){
+		for(x=0;x<16;x++){
+			c=closebtn[y][x];
+			if(c=="")
+			elif(c=="")
+			elif(c=="")
+			else 
+		buf[(5+y)*xsize+ (xsize-21+x)]=c;
+		}
+	}
+	return;
+}
+然后在hairmain中将我们创造的图形输出
+	make_window8(buf_win, 160, 68, "window");
+	putfonts8_asc(buf_win, 160, 24, 28, COL8_000000, "Welcome to");
+	putfonts8_asc(buf_win, 160, 24, 44, COL8_000000, "my OS");
+	sheet_slide(sht_win, 80, 72);输出大小
+	sheet_updown(sht_win,   1);输出位置
+
+	putfonts8_asc(buf_win, 160, 24, 28, COL8_000000, "Welcome to");
+	putfonts8_asc(buf_win, 160, 24, 44, COL8_000000, "my");//输出内容
+
+	//	sheet_updown(sht_back,  0);
+	//  sheet_updown(sht_win,   1);
+	//  sheet_updown(sht_mouse, 2);三图层相对位置，保证的鼠标永远位于最上方
