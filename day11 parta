@@ -1,0 +1,148 @@
+day11
+然后要做到的对程序内部有一个自动的计时单位，通过的计算机内部一个自动计时的芯片，对cpu执行的内容实时更新，而不必让cpu再分资源计时，同时对cpu执行任务的时间做出区分
+
+原理是计算机内部的8254芯片：
+IRQ0中断周期变更：
+	al=0x34:out(0x43,al);
+	al=中断周期的第八位：out(0x40,al);
+	al=中断周期的高八位：out()x40,al);
+	如果指定中断周期未0,则默认是65536实际的中断产生频率是单位时间时钟周期数（主频)/设定数
+	exp:设定值为1000，产生频率单位时间为1.19318kHz
+		设定值为10000，产生频率的单位时间为119.318kHz
+		示意图中断周期设为11932，中断频率则为100Hz，一秒产生100次中断，11932十六进制为0x2e9c
+
+
+	timer.c
+#define PIT_CTRL 0x0043
+#define PIT_CNT0 0x0040
+
+void init_pit(void){
+	io_out8(pit_ctrl,0x34);
+	io_out8(pit_ctr0,0x9c);
+	io_out8(pit_ctr0,0x2e);
+	return;
+}
+	bootback.c
+hairmain(){
+
+	init_pit();
+	io_out8(PIC0_IMR,0xf8);
+	io_out8(PIC1_IMR,0xef);
+}
+	timer.c
+void inthandler20(int *esp){
+	io_out8(PIC0_OCW2,0x60);
+	return;
+}
+	还有对naskfun内的函数中断进行定义，设置一个函数
+	_asm_inthander20:
+	...
+
+
+	init_gdtidt也要增加一些新设定...
+
+至此对于中断程序我们设定了一个中断时间频率，并对每次中断的时间频率进行了调整
+
+
+
+
+然后我们将程序每次中断的时间做一个技术
+struct TIMECTL{
+	unsigned int count;
+};
+
+struct TIMERCTL ,timerctl;
+void init_pit(void){
+	io_out8(pit_ctrl,0x34);
+	io_out8(pit_ctr0,0x9c);
+	io_out8(pit_ctr0,0x2e);
+	timectl.count=0;
+	return;
+}
+
+void inthandler20(int *esp){
+	io_out8(PIC0_OCW2,0x60);
+	timerctl.count++;
+	reutrn;
+}
+
+然后在hairmain中对及时的内容进行输出
+在for循环中加入
+sprintf(s,"%010d",timerctl.count);对每次记录的count进行输出,这样保证了每次计算的结果都是以每秒100的速度累加的
+
+
+但是同时也面临着如果记录的时间超过一个记录的超时系统即在超过s秒后对程序进行输出
+
+在timer.c
+struct TIMERCTL{
+	unsigned int count;
+	unsigned int timeout;
+	struct FIFO8 *fifo;
+	unsigned char data;
+};//通过fifo缓冲区对程序进行通知
+
+void init_pit(void){
+	。。。
+	timerctl.timeout=0;//初始化
+}
+void inthandler20(int *esp){
+	..
+	//如果设定超时，则法索
+	if(timerctl.timeout>0){
+		timerctl.timeout--;
+		if(timerctl.timeout==0){
+			fifo8_put(timerctl.fifo,timerctl.data);
+		}
+	}
+	return;
+}
+
+//超时记录函数
+
+void settimer(unsigned int timeout,struct FIFO8 *fifo,unsigned char data){
+	int eflags;
+	eflags =io_load_eflags();
+	io_cil();
+	timerctl.timeout=timeout;
+	timerctl.fifo=fifo;
+	timerctl.data=data;
+	io_store_eflags(efalgs);
+	return;
+}
+//这里我们是在inthandler20设定每次timout从1->0，就像fifo发送数据
+//在settimer中对每次超时的程序复原
+
+
+然后工具写完了在hairmain中实现
+
+struct fifo8 timerfifo;
+char s[40],keybuf[32],mousebuf[128],timerbuf[8];
+
+
+..
+fifo8_init(&timerfifo,8,timerbuf);
+settimer(1000,&timerfifo,1);
+
+
+for(;;){
+	..
+	io_cil;
+	if(fifo8_status(&keyfifo)+fifo8_status(&mousefifo)+fifo8_status(&timerfifo)==0){
+	io_sti();
+
+	}else {
+		if (fifo_status(&keyfifo)!=0){
+			..
+		}elif (fifo8_status(&mousefifo)!=0){
+		...
+		} elif(fifo_status(&timefifo)!=0){
+			i=fifo+get(&timefifo);
+			io_sti();
+			putfont8_asc(buf_back,binfo->scrnx,0,64,COL8_ffffff,"timeout");
+			sheet_refresh(sht_back,0,64,56,80);
+		}
+	}
+}
+//这样就可以保证程序在首次10s后向屏幕发送一个timeout
+
+
