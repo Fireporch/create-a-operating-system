@@ -1,0 +1,126 @@
+day11 b
+回顾，首先我们已经创建并完成了对于计时器的初始化，提供了一个可调用的参数来记录100Hz的消息，其次我们完成了超时功能（timeout)接下来就是对定时系统的优化了
+
+设定多个计时器，首先对原始结构体重新定义
+#defined MAX_TIMER=500;
+struct TIMER{
+	unsigned int timeout,flags;
+	struct FIFO8 *fifo;
+	unsigned char data;
+};
+struct TIMERCTL{
+	unsigned int count;
+	struct TIMER timer[MAX_TIMER]
+};
+这样节课实现定时器的个数拓展，flags作为判定各个定时器的标志
+然后我们应用的TIMECTL作为计时器的结构体，将flags加入原始函数中
+首先是init_pit定义函数
+void init_pit(void)
+{
+	io_out8(PIT_CTRL, 0x34);
+	io_out8(PIT_CNT0, 0x9c);
+	io_out8(PIT_CNT0, 0x2e);
+	timerctl.count = 0;
+	for(i=0;i<MAX_TIMER;i++){
+		timerctl.timer[i].flags=0;
+	}
+	return;
+}
+然后是结构体timer的初始化
+struct TIMER *timer_alloc(void){
+	int i;
+	for(i=0;i<MAX_TIMER;i++){
+		if(timerctl.timer[i].flags==0){
+			timerctl.timer[i].flags=TIMER_FLAGS_ALLOC;
+			return &timectl.timer[i];
+		}
+	}
+	return 0;
+}
+
+void timer_free(struct TIMER *timer){
+	timer->flags=0;
+	return;
+}//定时器释放
+
+void timer_init(struct TIMER *timer,struct FIFO8 *fifo,unsigned char data){
+	timer->fifo=fifo;
+	timer->data=data;
+	return;
+}//定时器初始化
+
+void timer_settime(struct TINER *timer,unsigned int timeout){
+	timer->timeout=timeout;
+	timer->flags=TIMER_FLAGS_USING;
+	reutrn;
+}//设定初始时间，开始使用定时器
+
+void inthandler20(int *esp){
+	io_out8(PIC0_OCW2,0x60);
+	timerctl.count++;
+	for( int i=0;i<MAX_TIMER;i++){
+		if(timerctl.timer[i].flags==TIMER_FLAGS_USING){
+			timerctl.timer[i].timerout--;
+			if(timerctl.timer[i].timeout==0){
+				timerctl.timer[i].flags=TIMER_FLAGS_ALLOC;
+				fifo8_put(timerctl.timer[i].fifo,timerctl.timer[i].data);
+			}
+		}
+	}
+	return;
+}//排队，计时器顺序调整
+
+但是在调用程序的时候inthandler20处理也需要用一段时间，我们需要保证这一段时间尽可能小才能保证每一段时间尽可能的精准，所以对inthandler函数进行优化
+void inthandler20(int *esp){
+	io_out8(PIC0_OCW2,0x60);
+	timerctl.count++;
+	for( int i=0;i<MAX_TIMER;i++){
+		if(timerctl.timer[i].flags==TIMER_FLAGS_USING){
+			if(timerctl.timer[i].timeout==0){
+				timerctl.timer[i].flags=TIMER_FLAGS_ALLOC;
+				fifo8_put(timerctl.timer[i].fifo,timerctl.timer[i].data);
+			}
+		}
+	}
+	return;
+}将函数中的timeout变为预定时间，不在用排队函数中再去进行计算任务了，相应的timer_settime函数timer->timeout=timeout+timerctl.count;
+
+我们再来分析这个判定函数
+他用到了一个500次的for循环，循环中进行了两次if判定用来标识中断，共需判定500*500次，但是实际执行时，我们其实就是先响应了一个中断，相应完成后再去执行下一个最近的时刻判定，因此用一个类似指针的东西将这几个定时器中断判定好，就可简化排队过程循环执行的等待判定时间
+在结构体中追加next
+
+首先是bookpack.h
+struct TIMERCTL{
+	unsigned int count ,next;
+	struct TIMER timer;
+};
+
+void inthandler20(int *esp){
+	int i;
+	io_out8(PIO0_OCW2,0x60);
+	timerctl.count++;
+	if(tiemrctl.next> timerctl.count){
+		return;//如果下次时刻执行的时间比此次执行段，直接跳出，没必要在此刻继续判定了
+	}
+	timerctl.next=0xffffffff;
+	for(i=0;i<MAX_TIMER;i++){
+		if(timerctl.tiemr[i].flags==TIMER_FALGS_USING){
+		//超时
+			tiemrctl.timer[i].flags=TIMER_FLAGS_ALLOC;
+			fifo8_put(timectl.timer[i].fifo,timerctl.timer[i].data);
+		}else{
+		//未超时
+			if(timerctl.next > timerctl.tiemr[i].timeout){
+				tiemrctl.next=timerctl.tiemr[i].timeout;
+			}
+		}
+	}
+	return;
+}
+
+
+修改函数
+void init_pit(void)
+void timer_settime(struct TIMER *timer,unsigned int timeout)
+
+over定时器优化完毕
