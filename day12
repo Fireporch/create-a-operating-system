@@ -1,0 +1,188 @@
+day12
+首先是将bookpack.c的文件内容进行修正
+程序在for( ; ; )中多次重复调用
+boxfill8(buf_back,binfo->scrnx,COL8_008484,0,16,15,31);
+putfonts8_asc(buf_back,binfo->scrnx,0,16，COL8_FFFFFF,s);
+sheet_refresh(sht_back,0,16,16,32);
+这段程序的任务是先涂上背景色，写字符并刷新，我们合并为一个函数，需要时调用即可
+void putfonts8_asc_sht(struct SHEET *sht,int x,int y,int c,int b,char *s,int l){
+	boxfill8(,sht->buf,sht->bxsize,b,x,y,x+1*8-1,y+15);
+	putfonts8_asc(sht->buf,sht->bxsize,x,y,c,s);
+	sheet_refresh(sht,x,y,x+1*8,y+16);
+	return;
+}
+x	显示位置坐标
+c 	字符颜色
+b 	背景颜色
+s 	字符串
+l 	字符串长度
+
+所以每次调用
+putfonts8_asc_sht(sht_back,0,,16,COL8_008484,s,2);
+
+
+if(fifo_status(&keyfifo)+fifo8_status(&mousefifo)+fifo_status(&timerfifo)+fifo8_status(&timerfifo2)+fifo8_status(&timerfifo3)==0){
+	io_sti();
+}
+中这个语句用来判定三个缓冲区，但是当增加定时器后if判定增多，所以我们将所欲FIFO缓冲区汇集
+
+
+整合fifo
+fifo8_init(&timerfifo,8,timerbuf);
+
+timer=timer_alloc();
+tiemr_init(timer,&timerfifo,10);
+timer_settime(tiemr,1000);
+
+timer2=timer_alloc();
+timer_init(timer2,300);
+
+timer3=timer_alloc();
+timer_init(timer3.&timerfifo,1);
+timer_settime(timer3,50);
+
+对缓冲区数值整合，每次判定总数更正hairmain中的判定
+
+
+
+
+然后我们要把定时器检测
+要做得任务是在程序运行时，每间隔10s输出一次count，每3s清空
+if (i == 10) { /* 超时10s后*/
+				putfonts8_asc_sht(sht_back, 0, 64, COL8_FFFFFF, COL8_008484, "10[sec]", 7);
+				sprintf(s, "%010d", count);
+				putfonts8_asc_sht(sht_win, 40, 28, COL8_000000, COL8_C6C6C6, s, 10);
+			} else if (i == 3) { /* 超时3s后*/
+				putfonts8_asc_sht(sht_back, 0, 80, COL8_FFFFFF, COL8_008484, "3[sec]", 6);
+				count = 0; /* 清空count */
+			} else if (i == 1) { /* 当计时器时间为1 */
+				timer_init(timer3, &fifo, 0); 
+				boxfill8(buf_back, binfo->scrnx, COL8_FFFFFF, 8, 96, 15, 111);
+				timer_settime(timer3, 50);
+				sheet_refresh(sht_back, 8, 96, 16, 112);
+			} else if (i == 0) { 
+				timer_init(timer3, &fifo, 1); 
+				boxfill8(buf_back, binfo->scrnx, COL8_008484, 8, 96, 15, 111);
+				timer_settime(timer3, 50);
+				sheet_refresh(sht_back, 8, 96, 16, 112);
+			}
+而且这个超时的输出每次都是单次输出，不是个循环（每10s输出一次那种）
+根据这个我们可以看到超时系统每次工作的输出结果其实都是由移位的
+这样的原因是：
+			我们设定的计时器，可以做到精确的为每一次记录做1s100次的跳转，但是跳转完成后，先进行一个timer_setting计算，而且我们设定了三个计时器，每次记录完成后程序运行时间也被算作了记录时间
+所以要尽可能使timer_setting函数的移位少占用时间,
+
+因此，在TIMER结构体中加入地址变量（next）用来存放下一次超时的定时器地址，保证多个计时器同时工作移位能快速被找到并执行，使每次移位都是只寻找下一个地址的运算而不是个数组
+struct TIMER{
+	struct TIMER *next;// <-----增加next
+	unsigned int timeout,flags;
+	struct FIFO32 *fifo;
+	int data;
+};
+然后在中断处理函数inthander20加入next
+而且原来的计时器不用写成数组了，只用到初始计时器位置即可，所以TIEMRCTL程序的timer[]修整为一个timer即可
+
+//其实刚才的操作就是把一个数组形式的计时器结构修改为一个线性链表结构存储计时器位置
+
+在线性链表中加入哨兵以监视程序链表的执行，我们将哨兵的超时时刻定义为0xfffffffff
+初始化这个哨兵
+void init_pit(void){
+	int i;
+	struct TIMER *t;
+	io_out8(PIT_CTRL,0x34);
+	io_out8(PIT_CNT0,0x9c);
+	io_out8(PIT_CNT0,0x2e);
+	timerctl.count=0;
+	for(i=0;i<MAX_TIMER;i++){
+		tiemrctl.timers0[i].flags=0;//给所有的超时器都设为未被使用
+	}
+	t=timer_alloc();//哨兵
+	t->timeou=0xffffffff;
+	t->flags=TIEMR_FLAGS_USING;
+	t->next=0;//哨兵就是最后一位了
+	tiemrctl.t0=t;
+	timectl.next=0xfffffffff;
+	timerctl.using=1;
+	return;
+}
+
+然后我们既然对这个计时器最后一步进行了判定，那么在最后一步也要对这个整个的计时器数组做一个初始化
+在每一个哨兵时刻调整程序
+int t0=timectl.count;
+io_cil();
+timerctl.count-=t0;
+for(i=0;i<MAX_TIMER;i++){
+		if(timerctl.time[i].flags ==TIMER_FLAGS_USING){
+			if(timerctl.timer[i].timeout !=0xffffffff){
+				timerctl.timer[i].timeout -=t0;
+			}
+		}
+}
+io_sti();
+
+
+所以在time_setting时只剩下两种可能，程序只有一个计时器，或者程序运行到最后一个哨兵timer了才需要对其进行调整
+更改后的time_setting
+
+
+void timer_setting(struct TIEMR *timer,unsinged int timeout){
+	int e;
+	struct TIEMR *t,*s;
+	timer->timeout=timeout+timerctl.count;
+	timer->flags=TIMER_FLASG_USING;
+	e=io_load_eflags();
+	io_cil();
+	timerctl.using++;
+	t=timerctl.t0;
+	if(timer->timeout<=t->timeout){
+		//只有一个计时器
+		timerctl.t0=timer;
+		timer->next=t;
+		timercrl.next=timer->timeout;
+		io_store_eflags(e);
+		return;
+	}
+	for(;;){
+		s=t;
+		s=t->next;
+		if(timer->timeout<=t->timerout){
+			//当最后一个计时器为哨兵计时器时
+			s->next=timer=timer;
+			timer->next=t;
+			io_store_eflags(e);
+			return;
+		}
+	}
+}
+
+
+time_setting对程序要用到的所有计时器特殊位置调整做出了详细规定
+在中断时进行位置调整的inthandler20函数也要做出相应的变化
+而且原本用于记录先后位置的using变量也不在被需要了，我们不用了解程序到底用了几个计时器，我们只要保证前一个计时器用完之后能实时获取下一个计时器的位置而且当总计时器用完之后能进行初始化就行
+修改后的inthandler20
+void inthandler20(int *esp){
+	struct TIMER *timer;
+	io_out8(PIC0_OCW,0x60);
+	tiemrctl.count++;
+	if(timerctl.next>timerctl.count){
+		return;
+	}
+	timer =timerctl.t0;
+	for(;;){
+		if(timer->timeout>tiemrctl.count){
+			break;
+		}//超时
+	timer->flags=TIEMR_FLAGS_ALLOC;
+	fifo32_put(timer->fifo,timer->data);
+	timer=timer->next;
+	}
+	tiemrctl.t0==timer;
+	tiemrctl.next=timer->timeout;
+	return;
+}
+之前的结果为：0165162275
+然后进行测试——————————记录测试结果为：0165536200
+
+
+？？？程序运行反而变慢了
+有问题
