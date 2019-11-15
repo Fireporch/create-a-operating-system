@@ -1,0 +1,146 @@
+继续，对程序的多任务设定优先级，首先修改程序跳转间隔
+原有的四个程序条黄钻都是0.02s，我们设定为0.01s-0.1s的不同时间跳转
+struct TASK{
+	int sel,falgs;
+	int peiority;//优先级
+	seruct TSS32 tss;
+};
+
+同理mtask.c中的task_init也要增加对优先级的初始化
+
+在timer_settime(task_timer,task->priority);
+
+然后是task_run我们设定他可以通过参数来调整优先级
+if(priority>0){
+	task->priority=priority;
+}
+然后是task_switch中的timer_settime;
+
+改写fifo
+对于从fifo中初始化的任务，我们设置其优先级为0即可
+int fifo32_put(struct FIFO32 *fifo,int data){
+	..
+	fifo->free--;
+	if(fifo->task !=0){
+		if(fifo->task->flags !=2){
+			task_run(fifp->task,0);
+
+		}
+	}
+	return 0; 
+}
+
+最后在hairmain中对sht_win初始化中的三个变量初始化时做一些调整
+for(i=0;i<3;i++){
+	task_run(task_b[i],i+1);
+}
+
+
+我们设定了b0为1，b1为2，b2为3因此b2应该是最快的
+
+
+对多任务同时进行处理设定优先级赢保证高层LEV中哪怕只有一个任务也要忽略下层LEV中程序的运行，因此要实现这样的task分级，要在taskctl 中创建多个task[]即可
+
+#define MAX_TASKLEVELS 10
+struct TASKLEVEL{
+	int running;//记录正在运行的任务数
+	int now;//记录那个工作在运行
+	struct TASK *tasks[MAX_TASKS_LV];
+};
+
+strcut TASKCEL{
+	int now_lv;//现在正在工作的level
+	char lv_change;
+	struct TASKLEVEL level[MAX_TASKLEVELS];
+	strcut TASK tasks0[MAX_TASKS];
+};
+
+
+我们规定每个LEV最多创建100个任务，总共10个LEV
+然后我们创建几个操作task_level的函数
+struct TASK *task_now{
+	struct TASKLEVEL *tl=&taskctl->level[taskctl->now_lv];
+	return tl->task[tl->now];
+}//该函数用于返回现在活动的TASK内存地址
+
+创建task_add用于向tasklevel中添加一个任务
+void task_add(struct TASK *task){
+	struct TASKLEVEL *tl=&taskctl->level[task->level];
+	tl->tasks[tl->running]=task;
+	tl->running++;
+	task->flags=2;//活动中
+	return;
+}
+
+task_remove用于在TASKLEVEL中删除一个任务
+void task_remove(struct TASK *task){
+	int i;
+	struct TASKLEVEL *tl=&taskctl->level[task->level];
+	//找到task的位置
+	for(i=0;i<tl->running;i++){
+		if(tl->tasks[i]==task){
+			break;
+		}
+	}
+	tl->running--;
+	if(i<tl->now){
+		tl->now;
+	}
+	if(tl->now>=tl->running){
+		tl->now=0;
+	}
+	task->flags=1;
+	for(;i<tl->running;i++){
+		tl->tasks[i]=tl->tasks[i+1];
+	}
+	return;
+}
+
+接下来定义任务切换时切换到那个LEVEL
+void task_switchsub(void){
+	int i;
+	for(i=0;i<MAX_TASKLEVEL ;i++){
+		if(taskctl->level[i].running>0){
+			break;
+		}
+	}
+	taskctl->now_lv=i;
+	taskctl->lv_change=0;
+	return;
+}
+
+
+然后在task 的初始化函数中定义一开始只有level0一个任务，
+
+
+最后修改task_run让程序以设定好的优先级顺序来执行
+
+void task_run(strcut TASK *task,int level,int priority){
+	if(level<0){
+		level=task->level;//不改变level
+	}
+	if(priority>0){
+		task->priority=priority;
+	}
+	if(task->flags==2&&task->level != level){//改变活动中的level
+		task_remove(task);
+	}
+	if(task->flags!=2){
+	//从休眠到唤醒状态
+		task->level=level;
+		task_add(task);
+	}
+
+	taskctl->lv_change=1;
+	return;
+}
+
+
+
+最后修改task_sleep任务调用remove精简代码
+
+
+最后通过对hairmain中初始化优先级的设定结束
+
+我们就能以层级方式控制各个进程的优先级管理了
+
