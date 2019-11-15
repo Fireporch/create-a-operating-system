@@ -1,0 +1,296 @@
+day15
+
+创建任务自动管理器
+我们在最后通过mtask。c实现在程序运行性时分配任务并自动创建多任务
+但是在mt_taskswitch中只能对两个程序进行切换，对更多的任务创建处理都不完整
+
+#define MAX_TASKS 1000
+#define TASK_GDT  0
+
+
+struct TSS32{
+	int ...
+
+};
+
+struct TASK{
+	int sel,flags;//存放gdt的编号
+	struct TSS32 tss;
+};
+
+struct TASKCTL{
+	int running;
+	int now;
+	struct TASK *tasks[MAX_TASKS];
+	strcut TASK tasks0[MAX_TASKS];
+};
+
+然后我们创建对struct TASKCTL初始化函数task_init
+由于struct TASKCTL是庞大的结构，因此在memman_alloc中申请内存空间
+
+
+struct TASK *task_init(strcut MEMMAN *memman){
+	int i;
+	struct TASK *task;
+	struct SEGMENT_DESCRPIPTOR *gdt=(struct SEGMENT_DESCRPIPTOR *) ADR_GDT;
+	taskctl=(struct TASKCTL *) memman_allock_4k(memman,sizeof(strcut TASKCTL));
+	for(i=0;i<MAX_TASKS;i++){
+		taskctl->tasks0[i].flags=0;
+		taskctl->tasks0[i].sel=(TASK_GDT0+i)*8;
+		set_segmdesc(gdt+TASK_GDT+i,103,(int)&taskcrl->tasks0[i].tss,AR_TSS32);
+	}
+	task=task_alloc();
+	task->flags=2;//活动标志
+	taskctl->running=1;
+	taskctl->now=0;
+	taskctl->tasks[0]=task;
+	load_tr(task->sel);
+	task_timer=timer_alloc();
+	timer_settime(task_timer,2);
+	return task;
+}
+调用task_init返回一个内存地址，调用init之后所有程序的运行都当做任务进行管理，在hairmain中我们调用task_init即可对hairmain中出现的各种程序当做新任务处理了
+
+
+
+然后就是初始化任务结构函数
+strcut TASK *task_allco(void){
+	int i;
+	strcut TASK *task;
+	for(i=0;i<MAX_TASKS;i++){
+		if(taskctl->tasks0[i].flags==0){
+			task=&taskctl->tasks0[i];
+			task->flags=1;//当前使用的进位标志
+			task->tss.eflags=0x00000202;
+			task->tss.eax=0;
+			....对那个tss的各项变量进行初始化附零
+			task->tss.iomap=0x40000000;
+			return task;
+		}
+	}
+	return 0;//全部正在使用
+}
+
+ 然后设置函数task_run
+
+ void task_run(struct TASK *task){
+ 	task->flags=2;
+ 	taskctl->tasks[taskctl->running]=task;
+ 	taskctl->running++;
+ 	return;
+
+ }
+
+
+ 将task添加到tasks末尾，running计数
+
+
+ task_swtich顺序调换
+ void task_switch(void){
+ 	timer_settime(task_timer,2);
+ 	if(taskctl->running>=2){
+ 		taskctl->now++;
+ 		if(taskctl->now==taskctl->running){
+ 			taskctl->now=0'
+ 		}
+ 		fatjmp(0,taskctl->tasks[taskctl->now]->sel);
+
+ 	}
+ 	return;
+ }当runnin为1时不需要进行任务切换，当running大于等位2,将now加一然后把now所代表的任务切换为当前任务最后将末尾的任务移动到开头
+
+ 然后就是对harimain的改正在hairmain初始化TASK结构体,对tss的值赋初值，初始化tss的各变量，初始化任务b的存储位置sht_back
+
+
+ 然后task_run(task_b);
+
+ 然后是让程序休眠
+ 休眠时指在程序跳转到taskb时，task就从task[]队列中删除
+ 为此在mtask.c中设置一个休眠函数
+ void task_sleep(struct TASK *task){
+ 	int i;
+ 	char ts=0;
+ 	if(task->flags==2){//任务处于唤醒状态
+ 		if(task==taksctl->task[taskctl->now]){
+ 			ts=1;//先将程序切换
+ 		}
+ 		//找到task位置
+ 		for(i=0;i<taskctl->running;i++){
+ 			if(taskctl->tasks[i]==task){
+ 				break;
+ 			}
+ 		}
+ 		taskctl->running--;
+ 		if(i<taskctl->now){
+ 			taskctl->now--;//移动成员
+ 		}
+ 		for(;i<taskctl->running;i++){
+ 			taskctl->tasks[i]=taskctl->tasks[i+1];
+ 		}
+ 		task->flags=1;//程序转到不工作的状态
+ 		if(ts!=0){
+ 			//切换任务
+ 			if(taskctl->now>=taskctl->running){
+ 			//如果now值异常修正
+ 			taskctl->now=0;
+ 			}
+ 			farjmp(0,taskctl->tasks[taskctl->now]->sel);
+ 		}
+ 	}
+ 	return;
+ }
+
+ 然后就是唤醒，首先要在缓冲区中记录要唤醒的任务成员
+ struct FIFO32{
+ 	int *buf;
+ 	int p,q,size,flags;
+ 	struct TASK *task;
+ };
+ 然后在fifo中增加关于task的操作，
+ 在初始化（fifo_init）中增加task的赋值
+ 在fifo_input时增加唤醒指令
+ if(fifo->task !=0){
+ 	if(fifo->task->flags !=2){
+ 		task_run(fifo->task);//任务唤醒
+ 	}
+ }
+
+ 最后改写hairmain在所有fifo_init以及fifo_input中增加task变量代入
+
+ 在程序测试时，计数超过两倍的递增
+ 原因如下：
+ 假定开始时每次任务b每秒处理100次
+ 10次用于count显示，90用于计算
+ 假定进行多任务分配后处理为每秒198次（休眠任务也要操作)
+ count 10,188计算
+ 188>90*2
+ 所以在显示时比原来的速度快了两倍
+
+
+ 然后我们对窗口数量增加并且使四个任务a，b0,b1,b2同时计数并以窗口的形式输出在屏幕上
+
+ void HairMain(void){
+ 	unsigned char *buf_back,buf_mouse[256],*buf_win,*buf_win_b;
+ 	strcut SHEET *sht_back,*sht_mouse,*sht_win,*sht_win_b[3];
+ 	strcut TASK *task_a,*task_b[3];
+ 	strcut TIMER *timer;
+
+ 	..
+ 	init_palette();
+ 	shtctl=shtctl_init(memman,binfo->varm,binfo->scrnx,binfo->scrny);
+ 	task_a=task_init(memman);
+ 	fifo_task=task_a;
+
+ 	//sht_back
+ 	sht_back=sheet_alloc(shtctl);
+ 	sht_back=(unsigned cahr *)memman_alloc_4k(memman,binfo->scrnx,binfo->scrny);
+ 	task_a=task_init(memman);
+ 	fifo.task=task_a;
+
+ 	//sht_win_b
+ 	for(i=0;i<3;i++){//因为这是同时创建了三个窗口，但是其实三个窗口创建初始化的都相同
+ 		sht_win_b[i]=sheet_alloc(shtctl);
+ 		buf_win_b=(unsigned char *)memman_alloc_4k(memman,144*52);
+ 		sheet_setbuf(sht_win_b[i],buf_win_b,144,52,-1);
+ 		sprinf(s,'*task_b%d',i);
+ 		make_window8(buf_win_b,144,52,s,0);
+ 		task_b[i]=task_alloc();
+ 		task_b[i]->tss.esp=memman_alloc_4k(memman,64*1024)+64*1024-8;
+ 		task_b[i]->tss.eip=(int)&task_b_main;
+ 		。。。。然后就是tss第二行的初始化
+ 		*((int *)(task_b[i]->tss.esp+4))=(int)sht_win_b[i];
+ 		task_run(task_b[i]);
+ 	}
+
+ 	//sht_win
+ 	sht_win=sheet_alloc(shtctl);
+ 	buf_win=(unsigned caht *)memman_alloc_4k(memman,106*52);
+ 	sheet_setbuf(sht_win,buf_win,144,52,-1);
+ 	make_window8(buf_win,144,52,'task_a',1);
+ 	make_textbox8(sht_win,8,28,128,16,COL8_FFFFFF);
+ 	cursor_x=8;
+ 	cursor_c=COL8_FFFFFF;
+ 	timer=timer_alloc();
+ 	timer_init(timer,&fifo,1);
+ 	timer_settime(timer,50);
+
+ 	//sht_mouse
+ 	sht_mouse=sheet_alloc(shtctl);
+ 	sheet_setbuf(sht_mouse,buf_mouse,16,16,99);
+ 	init_mouse_cursor8(buf_mouse,99);
+ 	mx=(binfo->scrnx-16)/2;
+ 	my=(binfo->scrny-28-16)/2;
+
+ 	sheet_slide(sht_back,0,0);
+ 	sheet_slide(sht_win_b[0],168,56);
+ 	sheet_slide(sht_win_b[1],8,116);
+ 	sheet_slide(sht_win_b[2],168,116);
+ 	sheet_slide(sht_win,8,56);
+ 	sheet_slide(sht_mouse,mx,my);
+ 	sheet_updown(sht_back,0);
+ 	sheet_updown(sht_win_b[0],1);
+ 	sheet_updown(sht_win_b[1],2);
+ 	sheet_updown(sht_win_b[2],3);
+ 	sheet_updown(sht_win,4);
+ 	sheet_updown(sht_mouse,5);
+ 	sprintf(s,'(%3d,%3d',mx,my);
+ 	putfonts8_asc_sht(sht_back,0,0,COL8_FFFFFF,COL8_008484,s,10);
+ 	sprintf(s,'memory: %dMB free:%dKB',memtotal/(1024*1024),memman_tatal(memman)/1024);
+ 	putfonts8_asc_sht(sht_back,0,32,COL8_FFFFFF,COL8_008484,s,40);
+
+ 	for(;;){
+ 		io_cil();
+ 		if(fifo32_status(&fifo)==0){
+ 			task_sleep(task_a);
+ 			io_sti();
+ 		}else{
+ 		i=fifo32_get(&fifo);
+ 		io_sti();
+ 		if(256<=i&&i<=511){
+ 		键盘数据	..
+ 		}elif(512<=i&&i<=767){
+ 			...光标定时器
+ 		}elif(i<=1){
+ 		光标定时器
+ 		}
+
+ 		}
+ 	}
+ }
+
+ void task_b_main(struct SHEET *sht_win_b){
+ 	strcut FIFO32 fifo;
+ 	strcut TIMER *timer_ls;
+ 	int i,fifobuf[128],count=0,count0=0;
+ 	char s[12];
+
+ 	fifo32_init(&fifo,128,fifobuf,0);
+ 	timer_ls=timer_alloc();
+ 	timer_init(timer_ls,&fifo,100);
+ 	timer_settime(timer_ls,100);
+
+ 	for(;;){
+ 		count++;
+ 		io_cil();
+ 		if(fifo32_status(&fifo)==0){
+ 			io_sti();
+ 		}else{
+ 			i=fifo32_get(&fifo);
+ 			io_sti();
+ 			if(i==100){
+ 				sprintf(s,'%11d',count-count0);
+ 				putfonts8_asc_sht(sht_win_b,24,28,COL8_000000,COl8_C6C6C6,s,11);
+ 				count0=count;
+ 				timer_settime(timer_ls,100);
+ 			}
+ 		}
+ 	}
+ }
+综上我们调用box，timer，fifo，对这个os设置了三个计数框
+和一个读写框
+
+
+
+
+回顾hairmain
+
