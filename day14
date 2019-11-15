@@ -1,0 +1,239 @@
+day14
+实现多任务切换
+多任务在此不赘述，寄存器中的内容是通过任务状态段TSS实现
+在GDT中定义后使用
+struct TSS32{
+	int backlink,esp0,ss0,eps1,ss1,esp2,ss2,cr3;
+	int eip,eflags,eax,ecx,edx,ebx,esp,ebp,esi,edi;
+	int es,cs,ss,ds,fs,gs;
+	int ldtr,iomap;
+};
+TSS中定义了26个int字节,第一行保存不是寄存器的数据，任务切换时不被写入
+第二行时32位寄存器，第三行时16位寄存器
+eip时cpu记录吓一跳需要执行的指令位于内存中地址的寄存器，每执行一条指令，eip自动累加，保证一直只想下一条指令所在的内存地址
+
+第四行ldtr与iomap时任务相关设置，执行先将ldtr设为0，iomap设为0x40000000
+
+任务切换用JMP指令，jmp指令分两种，一种near模式（只改写eip），一种是far模式（同时改写eip，cs）
+
+然后开始任务切换：
+	struct TSS2 tss_a,tss_b;
+	tss_a.ldtr=0;
+	tss_b.ldtr=0;
+	tss_a.iomap=0x40000000;
+	tss_b.iomap=0x40000000;
+
+	接着让他们在两个gdt中执行
+
+	struct SEGMENT_DESCRIPTOR *gdt=(struct SEGMENT_DESCRIPTOR *)ADR_GDT;
+
+	set_segmdesc(gdt+3,103,(int) &tss_a,AR_TSS32);
+	set_segmdesc(gdt+4,103,(int) &tss_b,AR_TSS32);
+
+
+	我们把两个tss创建好后，先向TR寄存器存入3*8，刚才运行的任务定义为GDT的3号，TR寄存器的值也会变化，每次给TR寄存器赋值时，必须把GDT的编号乘8，而且赋值要编译语音
+
+	load_tr(3*8);
+	_load_tr:
+	LTR 	[ESP+4]
+	RET
+	而且实际进行任务切换指令还要执行far 模式的跳转指令
+	_taskswitch4:
+		JMP 	4*8:0
+		RET 	
+
+然后在使用任务跳转时只需要执行taskswitch4即可
+我们切换的任务时tass_b，任务切换时读取内容其内容，
+tss_b.eip=(int) &task_b_main;
+tss_b.eflags=0x00000x0x
+tss_b.eax=0
+tss_b.ecx=0
+tss_b.edx=0
+tss_b.esp=task_b_esp;
+..要保证一开始写入tss的第二行所有变量都要对其赋值
+
+在eip中，我们需要定义在切换任务时下一任务时什么，所以我们将task_b_main函数地址写入
+
+void task_b_main(void){
+	for(; ;){
+	io_hit();
+	}
+}
+
+task_b_esp()函数为任务B所定义的栈
+int task_b_esp;
+task_b_esp=memman_alloc_4k(memman,64*1024)+64*1024;
+
+这样在运行到任务切换时，程序从a哪里计时的任务就切换为停止任务b
+
+
+ok运行后结果切换成功，那我们如果想从任务a切换为任务b经过一段时间后再切换为任务a只需要改写一下task_b_main
+
+
+void task_b_main(void){
+	struct FIFO32 fifo;
+	struct TIMER *timer;
+	int i,fifobuf[128];
+
+	fifo32_int (&fifo,128,fifobuf);
+	timer=timer_alloc();
+	timer_init(timer,&fifo,1);
+	timer_settime(timer,500);//超时时间记录
+
+	for(;;){
+	io_cli();//暂停
+	if(fifo32_status(&fifo)==0){
+		io_stihlt();
+
+	}else{
+		i=fifo32_get(&fifo);
+		io_sti();
+		if(i==1){//超时时间超过5s
+			taskswitch3();//返回任务a
+		}
+	}
+
+	}
+}
+
+然后在nackfun.nas中创建一个taskswitch3()用于跳转
+
+_taskswitch3:
+	JMP 	3*8:0
+	RET
+
+
+如果要实现快速的多任务切换，在naskfun.nas中写一个创建任务切换跳转指令的函数
+_farjmp: 	;void farjmp(int eip,int cs);
+	JMP 	FAR [ESP+4]
+	RET
+
+因此原来的taskswitch3();  ->  farjmp(0,3*8);
+		 taskswitch4();  ->  farjmp(0,4*8);
+
+然后我们来缩短任务的切换操作，保证0.02s实现一次任务的切换
+
+在hairmain函数中我们设置变量tiemr_ts让程序每经过0.02s后就超时
+timer_ts =timer_alloc();
+timer_init(timer_ts,&fifo,2);
+timer_settime(timer_ts,2);
+
+
+继续使执行任务b时运行一些其他操作
+
+当程序在两个任务之间跳转时，保证各个程序在执行操作时处理的变量能被全局所应用，能传参，我们将地址0x0fec地址保存系统的全局变量
+*((int *)0xfec)=(int) sht_back;
+用变量sht_back保存程序的变量
+sht_back=(struct SHEET *) *((int *) 0xfec);
+
+
+
+
+还要尽可能保证系统执行程序跳转时切换时间尽可能短，提升巡行速度
+通过对比单纯的计数（part1）到我们执行程序跳转的计数（part3）能看出时间明显长
+改进方法：原有的计数每计数一次就显示，实际累加操作的执行要快得多，所以设置相对长的刷新间隔
+
+
+void task_b_main(strcut SHEET *sht_back){
+	struct FIFO32 fifo;
+	struct TIMER *timer_ts;
+	int i, fifobuf[128], count = 0;
+	char s[11];
+	struct SHEET *sht_back;
+
+	fifo32_init(&fifo, 128, fifobuf);
+	timer_ts = timer_alloc();
+	timer_init(timer_ts, &fifo, 2);
+	timer_settime(timer_ts, 2);
+
+	timer_put=timer_alloc();
+	timer_init(timer_ts,&fifo,1);
+	timer_settime(timer_put,1);
+	//关键是下面for循环，以前的显示putfonts8直接在count++后
+	for(;;){
+		count++;
+		io_cil();
+		if(fifo32_status(&fifo)==0){
+			io_sti();
+
+		}else{
+			i=fifo32_get(&fifo);
+			io_sti();
+			if(i==1){
+				sprintf(s,'%11d',count);
+				putfonts8_asc_sht(sht_back,0,122,COL8_FFFFFF,COL8_008484,s,11);
+				timer_settime(timer_put,1);
+			}else if(i==2){
+				farjmp(0,3*8);
+				timer_settime(timer_ts,2);
+
+			}
+		}
+
+	}
+
+}
+
+
+
+sht_back就作为参数传递就好了，count显示也改变了一下
+还有关于设置一段内存作为全局变量的存储地址，我们将定义的方式改为栈
+
+task_b_esp=memman_alloc_4k(memman,64*1024)+64*1024-8;
+*((int *)(task_b_esp+4))=(int)shet_back;
+这样每次任务b启动esp+4这个都中koi欧空刺玫sht_back的值，加减4的操作时为了保证我们设置内存地址的时候录入的总空间为64kb
+
+
+
+
+补充————-return
+本节中task_b_main已经向一个函数，但是不能使用return，return实际是返回函数调用位置的一个JMP指令，强行return的话，程序无法正常运行，（毕竟还是不是一个函数）而且为了能使这个程序运行时对变量操作的保存我们还特意分配了一段空间保存变量
+
+同理hairmain同样不能设置return
+
+
+
+
+
+
+然后就是想多任务进阶
+
+
+我们现在的操作都是依赖在HairMain与task_b_main中执行，而真正的多任务时在程序本身不知情的情况下添加新任务，不是先定义好了接下来要干什么而且程序执行时自动创建生成一个新任务
+
+
+mtask.c
+
+struct TIEMR *mt_timer;
+int mt_tr;//tr寄存器
+
+void mt_init(void){
+	mt_timer=timer_alloc;
+	timer_settime(mt_timer,2);
+	mt_tr=3*8;
+	return;
+
+}//这个函数初始mt_timer,mt_tr的值并将计时器设置为0.02s
+
+void mt_taskswitch(void){
+	if(mt_tr==3*8){
+		mt_tr=4*8;
+
+	}else{
+		mt_tr=3*8;
+
+	}
+	timer_settime(mt_timer,2);
+	farjmp(0,mt_tr);
+	return;
+}//根据当前mt_tr计算出下一个mt_tr的值，并进行任务切换
+
+
+然后对原来的HairMain进行改造
+
+
+
+
+
+
+
