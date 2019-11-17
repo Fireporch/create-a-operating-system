@@ -1,0 +1,206 @@
+day 19
+原有的操作系统可以显示磁盘中的文件名与文件大小信息了，文件本身的内容显示可以通过type显示
+所以我们今天首先创建type指令时命令行可以读取文件内容
+
+要读取文件首先要直到文件在哪个位置，clustno这个成员表示文件在哪个扇区开始存放
+clustno值相差1在磁盘位置就差一个扇区，
+磁盘中的地址=clustno*51+0x003e00
+elif(cmdline[0]=='t'&&cmdline[1]=='y'&&cmdline[2]=='t'&&cmdline[3]=='e'){
+	for(y=0;y<11;y++){
+		s[y]=' ';
+	}
+	y=0;
+	fot(x=5;y<11&&cmdline[x]!=0;x++){
+		if(cmdline[x]=='.'&&y<=8){
+		 	y=8;
+		}else{
+			s[y]=cmdline[x];
+			if('a'<=s[y]&&s[y]<='z'){
+				//字母大小写转化
+				s[y]-=0x20;
+			}
+			y++;
+		}
+	}
+	for(x=0;x<224;){
+		if(finfo[x].name[0]==0x00){
+			break;
+		}
+		if((finfo[x].type&0x18)==0){
+			for(y=0;y<11;y++){
+				if(finfo[x].name[y]!=s[y]){
+					goto type_next_file;
+				}
+			}
+			break;//找到文件
+
+		}
+		type_next_file:
+			x++;
+	}
+	if(x<2244&&finfo[x].name[0]!=0x00){
+		y=finfo[x].size;
+		p=(char *)(finfo[x].clustno*512+0x003e00+ADR_DISKIMG);
+		cursor_x=8;
+		for(x=0;x<y;x++){
+			//逐字输出
+			s[0]=p[x];
+			s[1]=0;
+			putfont8_asc_sht(sheet,cursor_x,cursor_y,COL8_FFFFFF,COL8_000000,s,1);
+			cursor_x=8;
+			cursor_y=cons_newline(cursor_y,sheet);
+		}
+	}
+}else{
+	//没有找到
+	putfont8_asc_sht(sheet,8,cursor_y,COL8_FFFFFF,COL8_000000,'File not found'，15)；
+	cursor_y=cons_newline(cursor_y,sheet);
+}elif(...其他指令)
+
+
+但是实际我们输出的时一堆乱码，没有对元字符转换
+
+修正
+在输出部分
+for(x=0;x<y;x++){
+			//逐字输出
+			s[0]=p[x];
+			s[1]=0;
+			if(s[0]==0x09){
+				for(;;){
+					putfont8_asc_sht(sheet,cursor_x,cursor_y,COL8_FFFFFF,COL8_000000, ' ',1);
+					cursor_x+=8;
+					if(cursor_x==8+240){
+						cursor_x=8;
+						cursor_y=cons_newline(sursor_y,sheet);
+					}
+					if(((cursor_x-8)&0x1f)==0){
+						break;
+					}
+				}
+			}elif(s[0]==0x0a){//换行
+				cursor_x=8;
+				cursor_y=cons_newline(cursor_y,sheet);
+
+			}elif(s[0]==0x0d){//回车
+			暂时不继续操作
+			}else{
+				putfont8_asc_sht(sheet,cursor_x,cursor_x,COL8_FFFFFF,COL8_000000,s,1);
+				cursor_x+=8;
+				if(cursor_x==8+240){
+					cursor_x=8;
+					cursor_y=cons_newline(cursor_y,sheet);
+				}
+			}
+			putfont8_asc_sht(sheet,cursor_x,cursor_y,COL8_FFFFFF,COL8_000000,s,1);
+			cursor_x=8;
+			cursor_y=cons_newline(cursor_y,sheet);
+		}
+特殊编码：
+			0x09 制表符
+			0x0a 换行符
+			0x0d 回车符
+
+
+其实在文件的显示中并不是连续的，要借助fat（文件内容分配表进行查询而且fat的指令还是经过压缩之后的，所以要对fat解压缩然后查询文件实际存储位置然后输出）
+
+在if(x<224&&finfo[x].name[0]!=0x00){
+	p=(char *)memman_alloc_4k(memman,finfo[x].size);
+	file_loadfile(dindo[x].clustno,finfo[x].size,p,fat,(char*)(ADR_DISKIMG+0x003e00));
+	cursor_x=8;
+	for(y=0;y<finfo[x].size;y++){
+		s[0]=p[y];
+		s[1]=0;
+		...
+	}
+	memman_alloc_4k(memman,(int )p,finfo[x].size);
+}
+
+还要写一个关于fat的解压缩函数
+voidfile_raedfat(int *fat,unsigned char *img){
+	int i,j=0;
+	for(i=0;i<2880;i+=2){
+		fat[i+0]=(img[j+0] | img[j+1]<<8)&0xfff;
+		fat[i+1]=(img[j+1]>>4 | img[j+2]<<4)&0xfff;
+		j+=3;
+	}
+	return;
+}
+void file_loadfile(int cllustno ,int size,char *buf,int *fat,char *img){
+	int i;
+	for(;;){
+		if(size <=512){
+			for(i=0;i<size;i++){
+				buf[i]=img[clustno*512+i];
+			}
+			break;
+		}
+		for(i=0;i<512;i++){
+			buf[i]=img[clustno*512+i];
+		}
+		size-=512;
+		buf+=512;
+		clustno=fat[clustno];
+	}
+	return;
+}
+整理代码将
+窗口相关函数  window.c
+命令行窗口相关函数 console.c
+文件相关函数 file.c
+
+终于要开始对应用程序实现了
+我们一开始创建的程序源码为
+[BITS 32]
+fin:
+	HIT
+	JMP fin
+
+为了使应用程序能顺利运行需要床架哪一个被UC一般都内存段，然后goto到该段程序中即可运行，
+elif(strcmp(cmdline,'hlt')==0){
+	//启动应用程序hlt.hrb
+	for(y=0;y<11;y++){
+		s[y]=' ';
+
+	}
+	s[0]='H';
+	s[1]='L';
+	s[2]='T';
+	s[8]='H';
+	s[9]='R';
+	s[10]='B';
+	for(x=0;x<224;){
+		if(finfo[x].name[0]==0x00){
+			break;
+		}if((finfo[x].type&0x18)==0){
+			for(y=0;y<11;y++){
+				if(finfo[x].name[y]!=s[y]){
+					goto hlt_next_file;
+				}
+			}
+			break;
+		}
+hlt_next_file:
+		x++;
+	}
+	if(x<224&&finfo[x].name[0]!=0x00){//找到文件
+	p=(char *)memman_alloc_4k(memman,finfo[x].size);
+	file_loadfile(finfo[x].clustno,finfo[x].size,p,fat,(char *)(ADT_DISKIMG+0x003e00));
+	set_segmdesc(gdt+1003,finfo[x].size-1,(int)p,AR_CODE32_ER);
+	farjmp(0,1003*8);
+	memman_alloc_4k(memman,(int)p,finfo[x].size);
+	}else{
+		//没有找到文件
+		putfont8_asc_sht(sheet,8,cursor_y,COL8_FFFFFF,COL8_000000,'FIle not Found',15);
+		cursor_y=cons_newline(cursor_y,sheet);
+	}
+	cursor_y=cons_newline(cursor_y,sheet);
+}
+
+但是因为我们这个程序十个中断程序，所以修改hlt
+[BITS 32]
+	CLT
+fin:
+	HLT
+	JMP fin
+这样就能使我们的操作程序在执行hlt程序后彻底死机over
