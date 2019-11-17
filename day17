@@ -1,0 +1,178 @@
+day17命令行窗口
+
+在程序执行中我们创建的那个结构如果上层任务终止，上层任务会休眠，然后在下一层的LEV中寻找任务并唤醒然后运行，但是如果该任务已经是最后一个任务，应该执行的时io_hit()，让该任务中断，
+
+一个好的操作系统应该自动在适当的LEV中运行适当的任务，没有任务继续将所有其操作系统中断
+
+在mtask.c中
+我们可以依照定时器的操作结构直接创建一个哨兵
+void task_idle(void){
+	for(;;){
+		io_hit();
+	}
+}
+
+我们每次移动鼠标或者fifo写入数据时，任务a就被唤醒，如果没有在最下层一直执行一个哨兵任务
+void task_init(){
+	strcut TASK *task,*idle;
+
+	..
+
+
+	idle=task_alloc();
+	idle->tss.esp=memman_allock_4k(memman,64*1024)+64*1024;
+	idle->tss.eip=(int)&task_idle;
+	idle->tss.es=1*8;
+	...同理继续对idle任务的tss赋值
+	task_run(idle,MAX_TASKLEVELS-1,1);
+
+	return task;
+}
+在执行中，最底层的level为这个idle任务
+
+for(i=0;i<3;i++){
+	....
+	*((int *)(task_b[i]->tss.esp+4))=(int)sht_win_b[i];
+
+}
+
+
+
+ok 程序执行
+接下来我们创建一个命令行窗口
+而且这个窗口并不算任务a的一部分而是单独的一个任务
+/*sht_cons*/
+sht_cons=sheet_alloc(shtctl);
+buf_cons=(unsigned char *)memman_allock_4k(memman,256*165);
+sheet_setbuf(sht_cons,bug_cons,256,165,-1);
+make_window8(buf_cons,256,165,'cmd',0);
+make_texbox8(sht_cons,8,28,240,128,COL8_0000000);
+task_cons=task_alloc();
+task_cons->tss.esp=memman_allock_4k(memman,64*1024)+64*1024-8;
+task_cons->tss.eip=(int)&console_task;
+task_cons->tss.es=1*8;
+task_cons->tss.cs=2*8;
+task_cons->tss.ss=1*8;
+task_cons->tss.ds=1*8;
+task_cons->tss.fs=1*8;
+task_cons->tss.gs=1*8;
+*((int *)(task_cons->tss.esp+4))=(int)sht_cons;
+task_eun(task_cons,2,2);
+//任务等级为2，优先级为2；
+
+
+。。。。
+sheet_slide(sht_back,0,0);
+sheet_slide(sht_cons,32,4);
+sheet_slide(sht_win,64,56);
+sheet_slide(sht_mouse,mx,my);
+sheet_updown(sht_back,0);
+sheet_updown(sht_cons,1);
+sheet_updown(sht_win,2);
+sheet_updown(sht_nouse,3);
+
+
+命令行还需要能写入一些指令并对这些指令操作
+
+任务要求：
+	输入tab建写入的任务都到命令行窗口中并改变窗口颜色
+
+在make_window8中对创建颜色的代码修改
+然后在创建sht_cons的窗口中添加写入的操作
+在fifo接受数据并判定时增加
+if(i==256+0x0f)//tab
+{
+	if(ket_to==0){
+		key_to=1;
+		make_wtitle(buf_win,sht_win->bxsize,'task_a',0);
+		make_wtitle(buf_cons,sht_cons->bxsize,'cons',1);
+	}else{
+		key_to=0;
+		make_wtitle(buf_win,sht_win->bxsize,'task_a',1);
+		make_wtitle(buf_cons,sht_cons->bxsize,'cons',0);
+	}
+	sheet_refresh(sht_win,0,0,sht_win->bxsize,21);
+	sheet_refresh(sht_cons,0,0,sht_cons->bxszie,21);
+}
+...
+//重新显示光标
+boxfill8(sht_win->buf,sht_win->bxsize,cursor_c,cursor_x,28,cursor_x+7,43);
+sheet_refresh(sht_win,cursor_x,28,cursor_x+8,44);
+....其他数据输入的判定及相应显示
+
+但是说实话可能是我键盘输入有问题，每次输入单个字符后应该输入十个中断并且改变，毕竟当初按在fifo缓冲区设置了那么长的数据输入区，而且照搬fifo这个数据结构创造的计时器等功能，数据结构应该是没有问题的但是实际输入在键盘字母区的某一输入时总是只能输入一个字符而且没有中断，输入一个字符后就无法输入其他数值了，算了在联系建立os的过程直到结束都当做是一个简单模式的创建吧
+
+
+实现字符的输入继续，我们刚才只是能创建输入光标，实际的sht_cons还不能输入字符
+
+
+因为os与键盘的交互基本全有，所以我们在创建任务时要直到我们的struct fifo的地址，所以直接把task与fifo绑定吧
+strcut TASK{
+....
+	strcut FIFO32 fifo;	
+};
+
+然后是hairmain中能对key_to的值相应并发送数据
+
+void HairMain{
+	....
+	for(;;){
+		...
+		if(256<=i&&i<=511){//键盘数据发送
+			sprintf(s,'02X',i-256);
+			putfonts8_asc_sht(sht_back,0,12,COL8_FFFFFF,COL8_008484,s,20);
+			if(i<0x54+256&&keytable[i-256]!=0){
+				if(key_to==0){
+					if(cursor_x<128){
+						s[0]=keytable[i-256];
+						s[1]=0;
+						putfonts8_asc_sht(sht_win,cursor_x,28,COL8_000000,COL8_008484,s,1);
+						cursor_x+=8;
+					}
+				}else{
+					fifo32_put(&task_cons->fifo,keytable[i-256]+256);
+				}
+			}
+			if(i==256+0x0e){//退格键
+				if(ket_to==0){//发送给任务a
+					if(curosr_x>8){//用空白擦除光标后一行
+						putfonts8_asc_sht(sht_win,cursor_x,28,COL8_000000,COL8_FFFFFF,''.1);
+						cursor_x-=8;
+					}
+				}
+				else{//发送给命令行窗口
+					fifo32_put(&task_cons->fifo,8+256);
+				}
+			}
+			if(i==256+0x0f){//tab建
+				...
+			}
+			...
+		}
+	}elif(鼠标)
+	elif(光标定时器)
+
+}
+
+所以当key_to不为0时，系统向命令行窗口发送键盘数据，支持一般字符与退格键，向命令行发送数据时，不是直接发送到键盘接受的原始数据，而是发送经过keytable[]转码之后的数据，省去命令行任务在对键盘的fifo缓存数据翻译一遍了
+
+对于退格键字符编码定义为8//这句话先不理解
+
+而且对于console_task也要改写，我们让其能处理并接受键盘数据，因此&fifo是&task->fifo
+
+
+然后对于命令行因为涉及到一些其他的特殊符号我们也要对其写入的话就从新定义从fifo发送的数据并像当初键盘输入字符一样定义几个码，这几码所对照的就是我们的特殊符号了
+为此创造了一个keytable1   PS：其实你要是键盘的处理全一点就不用写了
+
+对这个处理跟任务a处理一样不过在摁下tab建之后对fifo发送的数据单独解码
+然后又增加了一些对于shift建的功能，快捷指令编译
+
+快捷指令a：当摁下shift或者打开cpaslk锁后输入的都是大写字符
+
+实现if((key_led&4)==0&&key_shift==0 ||（key_leds &4)!=0&&(key_shift !=0){
+	s[0]+=0x20;//asc码加64
+
+}
+然后写入了capslk指令，同样的也可以增加一些其他的num——locks以及scrolllcok指令
+
+不详述实现  day17over
