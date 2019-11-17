@@ -1,0 +1,166 @@
+day18
+首先对输入框的光标控制，是每次输入才显示光标闪烁
+原来对光标的控制
+			else if (i <= 1) { /* 僇乕僜儖梡僞僀儅 */
+				if (i != 0) {
+					timer_init(timer, &fifo, 0); /* 師偼0傪 */
+					cursor_c = COL8_000000;
+				} else {
+					timer_init(timer, &fifo, 1); /* 師偼1傪 */
+					cursor_c = COL8_FFFFFF;
+				}
+				timer_settime(timer, 50);
+				boxfill8(sht_win->buf, sht_win->bxsize, cursor_c, cursor_x, 28, cursor_x + 7, 43);
+				sheet_refresh(sht_win, cursor_x, 28, cursor_x + 8, 44);
+			}
+
+现在要判断是否摁下tab键才进行闪烁，控制闪烁的函数为HairMain与console_task
+在tab键控制的判定中加入curosr_c=-1;使其暂时不显示光标
+if(i==256+0x0f){
+	if(key_to==0){
+	...
+		cursor_c=-1;
+	}else{
+		key_to=0;
+		cursor_c=CLO8_000000;//显示光标
+	}
+}
+if(cursor_c>=0){
+	boxfill8(sht_win->buf,sht_win->bxsize,curosr_c,cursor_x,28,cursor_x+7,43);
+}
+sheet_refresh(sht_win,cursor_x,28,cursor_x,28,cursor_x+8,44);
+elif(512<=i&&i<=767){
+	...鼠标控制操作
+}elif(i<=1)//光标控制操作{
+	if(i!=0){
+		timer_init(timer,&fifo,0);置零
+		if(cursor_c>=0){
+			cursor_c=COL8_000000;
+		}
+	}else{
+		timer_init(timer,&fifo,1);
+		if(cursor_c>=0){
+			cursor_c=COL8_FFFFFF;背景色
+		}
+	}
+	timer_settime(timer,50);
+	if(cursor_-c>=0){
+		boxdill8(sht_win->buf,sht_win->bxszie,cursor_c,cursor_x,28,cursor_x+7,43);
+		sheet_refresh(sht_win,cursor_x,28,cursor_x+8,44);
+	}
+}
+在我们不显示光标时cursor_c置为负
+但是对于命令行及新创建的任务中的光标符号无法从HairMain中传递信息让光标闪烁，所以控制fifo的输入控制光标是否闪烁，将光标闪烁定义为2，不闪烁为3
+fifo32_put(&task_cons->fifo,2);
+fifo32_put(&task_cons->fifo,3);
+
+void console_task(strcut SHEET *sheet){
+	...
+	int i,fifobuf[128],cursor_x=16,cursor_c=-1;
+
+	然后再控制光标定时器中修改操作为
+	if(i<=1){
+		timer_init(timer,&task->fifo,0);
+		if(cursor_c>=0){
+			cursor_c=COL8_FFFFFF;
+		}
+	}else{
+		timer_init(timer,&task->fifo,1);
+		if(cursor_c>=0){
+			cursor_c=COL8_000000;
+		}
+	}
+	timer_settime(timer,50);
+}
+if(i==2){
+	cursor_c=COL8_FFFFFF;
+}
+if(i==3){
+	boxfill8(sheet->buf,sheet->bxsize,COL8_000000,cursor_x,28,cursor_x+7,43);
+	cursor_c=-1;
+}
+
+
+
+自此新创建的任务与原有的task_a任务的光标都不会瞎显示了
+
+添加dir指令
+每个文件的存储结构
+strcut FILEINFO{
+	unsigned char name[8],ext[3],type;
+	char reserver[10];
+	unsigned short timer,date,clustno;
+	unsigned int size;
+};
+开始8字节为文件名，
+文件名第一个字节为0xe5表示这个文件已经被删除
+同理：
+	0x00 空文件
+接下来三个字节表示扩展名，type表示文件属性
+0x01 只读文件
+0x02 隐藏文件
+0x04 系统文件
+0x08 非文件信息（比如磁盘名
+0x10 目录
+当文件有多个类型，这些值相加
+然reserver表示其他文件信息预留空间
+short类型的三个变量为时分，时间戳
+clustno表示文件在磁盘的那个扇区存放
+size表示文件的大小
+
+#define ADR_BOOTNFO 0x00000ff0
+#define ADR_DISKIMG 0x00100000
+
+然后在系统中添加这个对保存文件信息的结构体
+strcut FILENFO{
+	..
+};
+
+void console_task(struct SHEET *sheet,unsigned int memtotal){
+	struct FILEFO *finfo=(strcut FILENFO *)(ADR_DISKIMG+0x002600);
+
+	//在键盘输入数据时增加判定
+	if(sercmp(cmdline,'mem')==0){
+	//mem命令
+	for(y=28;y<28+128;y++){
+		for(x=8;x<8+240;x++){
+			sheet->buf[x+y*sheet->bxsize]=COL8_000000;
+			//这个清屏就是开始到结束把这个屏幕用COL8_000000这个颜色全部填充
+		}
+	}
+	}elif(strcmp(cmdline,'dir')==0){
+	//dir命令
+		for(x=0;x<224;x++){
+			if(finfo[x].name[0]==0x00){
+				break;
+			}if(finfo[x].name[0]!=0xe5){
+				if((finfo[x].type&0x18)==0){
+					sprint(s,'filename.ext %7d',finfo[x].size);
+					for(y=0;y<8;y++){
+						s[y]=finfo[x].name[y];
+					}
+					s[9]=finfo[x].ext[0];
+					s[10]=finfo[x].ext[1];
+					s[11]=finfo[x].ext[2];
+					putfonts8_asc_sht(shet,8,y,cursor_y,COL8_FFFFFF,COL8_000000,s,30);
+					cursor_y=cons_newline(cursor_y,sheet);
+				}
+			}
+		}
+	}
+}
+
+
+以上的操作建立在这个console新任务创建中对fifo传递过来的各项参数做不同的显示，执行不同的操作而且我们还定义了一类特殊的操作
+
+dir读取文件信息
+clc清屏
+mem显示内存使用情况
+而且同理只要在fifo的操作中添加上elif(strcmp(cmdline,'XXXX')==0)就可以创建自己的命令了
+比如啊
+elif(strcmp(cmdline,'QHY')==0){
+	
+					putfonts8_asc_sht('QHY天下第一',8,y,cursor_y,COL8_FFFFFF,COL8_000000,s,30);
+}在命令行执行这个操作即可显示出'QHY天下第一'这个指令
+
+可惜这个键盘跟这个操作系统有一部分是不支持的，没办法实际演示
