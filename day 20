@@ -1,0 +1,344 @@
+day20
+上次我们能将应用程序运行了，今天实现应用程序对操作系统的功能的调用（API）
+对操作系统的console整理
+void console_task(){
+	
+}
+void cons_newline(struct CONSOLE *cons){
+	int x,y;
+	strcut SHEET *sheet=cons->sht;
+	if(cons->cur_y<28+112){
+		cons->cur_y+=16;//到下一行
+	}else{
+		//滚动
+		for(y=28;y<28+112;y++){
+			for(x=8;x<8+240;x+){
+				sheet->buf[x+y*sheet->bxsize]=sheet->buf[x+(y+16)*sheet->bxsize];
+			}
+		}
+		for(y=28+112;y<28+128;y++){
+			for(x=8;x<8+240;x++){
+				sheet->buf[x+y*sheet->bxsize]=COL8_000000;
+			}
+		}
+		sheet_refresh(sheet,8,28,8+240,28+128);
+	}
+	cons->cur_x=8;
+	return;
+}
+
+void cons_runcmd(char *cmdline,struct CONSOLE *cons,int *fat,unsigned int memtotal){
+	if(strcmp(cmdline,'mem')==0){
+		cmd_mem(cons,memtotal);
+	}elif(strcmp(cmdline,'cls')==0){
+		cmd_cls(cons);
+	}elif(strcmp(cmdline,'dir')==0){
+		cmd_dir(cons);
+	}elif(strcmp(cmdline,'type',5)==0){
+		cmd_type(cons,fat,cmdline);
+	}elif(strcmp(cmdline,'hlt')==0){
+		cmd_hlt(cons,fat);
+	}elif(cmdline[0]!=0){
+		//不是命令也不是空行
+		putfonts8_asc_sht(cons->sht,8,cons->cur_y,COL8_FFFFFF,COL8_000000,'bad COMMAND',12);
+		cons_newline(cons);
+		cons_newline(cons);
+	}
+	return;
+}
+
+void cmd_mem(strcut CONSOLE *cons,unsigned int memtotal){
+	struct MEMMAN *memman=(struct MEMMAN *)MEMMAN_ADDR;
+	char s[30];
+	sprintf(s,'total %dMB',memtotal/(1024*1024));
+	putfonts8_asc_sht(cons->sht,8,cons->cur_y,COL8_FFFFFF,COL8_000000,s,30);
+	cons_newline(cons);
+	sprintf(s,'free %dKB',memman_total(memman)/1024);
+	putfonts8_asc_sht(cons->sht,8,cons->cur_y,COL8_FFFFFF,COL8_000000,s,30);
+	cons_newsline(cons);
+	cons_newsline(cons);
+	return;
+}
+
+void cmd_cls(struct CONSOLE *cons){
+	int x,y;
+	strcut SHEET *sheet=cons->sht;
+	for(y=28;y<28+128;y++){
+		for(x=8;x<8+240;x++){
+			sheet->buf[x+y*sheet->bxszie]=COL8_000000;
+		}
+	}
+	sheet_refresh(sheet,8,28,8+240,28+128);
+	cons->cur_y=28;
+	return;
+}
+
+void cmd_dir(struct CONSOLE *cons){
+	struct FILENFO *finfo=(strcut FILENFO *)(ADR_DISKIMG+0x002600);
+	int ii,j;
+	char s[30];
+	for(i=0;i<224;i++){
+		if(finfo[i].name[0]==0x00){
+			break;
+		}
+		if(finfo[i].name[0]!=0xe5){
+			if((finfo[i].type&0x18)==0){
+				sprintf(s.'filename.ext  %7d',findo[i].size);
+				for(j=0;j<8;j++){
+					s[j]=finfo[i].name[j];
+				}
+				s[9]=finfo[i].ext[0];
+				s[10]=finfo[i].ext[1];
+				s[11]=finfo[i].ext[2];
+				putfonts8_asc_sht(cons->sht,8,cons->cur_y,COL8_FFFFFF,COL8_000000,s,30);
+				cons_newline(cons);
+			}
+		}
+	}
+	cons_newline(cons);
+	return;
+}
+
+
+void cmd_type(strcut CONSOLE *cons,int *fat,char *cmdline){
+	struct MEMMAN *memman=(struct MEMMAN *)MEMMAN_ADDR;
+	struct FILEINFO *finfo=file_serch(cmdline+5,(strcut FILEINFO *)(ADR_DISKIMG+0x002600),224);
+	char *p;
+	int i;
+	if(finfo!=0){
+		//找到文件的情况
+		p=(char *)memman_alloc_4k(memman,finfo->size);
+		file_loadfile(finfo->clustno,finfo->size,p,fat,(char *)(ADR_DISKIMG+0x003e00));
+		for(i=0;i<finfo->size;i++){
+			cons_putchar(cons,p[i],1);
+		}
+		memman_free_4k(memman,(int)p,finfo->size);
+
+	} else{
+			//未找到文件
+		putfonts8_asc_sht(cons->sht,8,cons->cur_y,COL8_FFFFFF,COL8_000000,'file not found',15);
+		cons_newline(cons);
+	}
+	cons_newline(cons);
+	return;
+}
+
+void cmd_hlt(struct CONSOLE *cons,int *fat){
+	sturct MEMMAN *memman=(strcut MEMMAN *)MEMMAN_ADDR;
+	strcut FILEINFO *finfo=file_search('HLT>.HRB',(strcut FILEINFO *)(ADR_DISKIMG+0x002600),224);
+	strcut SEGMENT_DESCRIPTOR *gdt=(struct SEGMENT_DESCRIPTOR *)ADR_GDT;
+	char *p;
+	if(finfo!=0){	
+		//找到文件
+		p=(cahr *)memman_alloc_4k(memman,finfo->size);
+		file_loadfile(finfo->clustno,finfo->size,p,fat,(char *)(ADR_DISKIMG+0x003e00));
+		set_segmdesc(gdt+1003,finfo->size-1,(int )p,AR_CODE32_ER);
+		farcmp(0,1003*8);
+		memman_free_4k(memman,(int)p,finfo->size);
+	}else {
+		//没有找到
+		putfonts8_asc_sht(cons->sht,8,cons->cur_y,COL8_FFFFFF,COL8_000000,'File not found',15);
+		cons_newline(cons);
+	}
+	cons_newline(cons);
+	return;
+}
+然后在console中将这些函数代入以实现cmd的各项功能
+对了file。c中还有个转换函数FILENFO用来转化文件内容
+
+接下来正式开始api
+首先我们做一个能显示单个字符的api
+愁思安做一个此时用应用程序并将要显示的字符录入al寄存器
+[BITS 32]
+	MOV 	LA,'A
+	CALL 	(cnos_putchar的地址)
+fin:
+	HLT
+	JMP 	fin
+
+call时用来调用函数的指令，与JMP指令差不多区别在于执行CALL时为了能接下来执行RET指令时正确反水会将返回的目标地址push到栈中
+而且hlt.nas 这个应用程序在汇编时并不包含操作系统本身的代码必须人工查找地址写入代码，我们对haribote.sys用操作指令make即可找到对应的目标函数地址
+但是实质上我们用的C语言写入函数，即便将字符编码写入寄存器，也无法接受，因此必须在CALL之前将文字推入栈
+
+所以为了能实现字符先推入栈，然后用CALL通知程序去调用cons_putchar我们写一个中间程序asm_cons_putchar用来在CALL，然后用asm_cons_putchar 去调用cons_putchar
+
+
+应用程序->asm_cons_putchar->cons_putchar
+具体的asm_cons_putchar地址在naskfun.nas中
+asm_cons_putchar:
+	PUSH 1
+	AND EAX,0xff
+	PUSH EAX
+	PUSH (cons地址)
+	CALL _cons_putchar
+	ADD ESP,12
+	RET
+但是我们使用CALL时应该加上段号
+far-CALL与RETF指定程序的相应位置
+这个far实际上的指定了段与偏移位移量
+
+
+
+现在我们执行完这个程序后会跳到hlt程序中断，我们改一下最初的程序
+首先在nas中写一个指定far-CALL的程序
+_farcall:	;void farcall(int eip,int cs)
+	CALL FAR[ESP+4]
+	RET
+
+然后找到最初的hlt
+void cmd_hlt(strcut CONSOLE *cons ,int *fat){
+	..
+	if(finfo!=0){
+		farcall(0,1003*8);
+	}else...
+
+	..
+}
+还要把nas中的hlt程序改正，原来的中断改成返回这样执行完上一个程序就不会造成一直中断的情况了
+
+
+实际在每次进行修改的时候执行程序的地址会发生偏移，而我们还要每次执行前都要找到这个函数以进行更改地址，所以找到一个明确的存放asm_cons_putchar的地方，而且保证函数的地址不变
+
+CPU有个专门用来存放注册函数的地方IDT（其实就是我们写中断函数的地方
+所以我们把中间的 转换函数写在哪里就可以避免每一个对nas写入函数地址都会发生偏移的情况了
+我们在init_gdtidt中追加一条命令来规定写入空间
+void init_gdtidt(void){
+	...
+	//IDT设置追加
+	set_gatedesc(idt+0x40,(int)asm_cons_putchar,2*8,AR_INTGATE32);
+
+}
+
+
+这样我们重要用INT 0x40来替代原来的CALL 2*8:0xbd1即可调用_asm_cons_putchar
+然后修改应用程序hlt，_asm_cons_putchar
+因为调用INT来控制函数时时当做中断处理的（没有用CALL）返回值应该用IRETD
+
+
+
+为了让程序能支持其他名称修改cons_runcmd
+void cons_runcmd(char *cmdline,strcut CONSOLE *cons,int *fat,unsigned int memtotal){
+....
+
+if(cmd_app(cons,fat,cmdline)==0){
+		//既不是命令也不是程序，也不是空行
+		....
+	}
+}
+
+
+追加cmd_app函数用来实现对程序的控制
+
+int cmd_app(strcut CONSOLE *cons ,int *fat,char *cmdline){
+	struct MEMMAN *memman=(struct MEMMAN *)MEMMAN_ADDR;
+	struct FILENFO *finfo;
+	struct SEGMENT_DESCRIPTOR *gdt=(struct SEGMENT_DESCRIPTOR *)ADR_GDT;
+	char name[18],p;
+	int i;
+	//根据命令行找程序
+	for (i=0;i<13;i++){
+		if(cmdline[i]<=' '){
+			break;
+		}
+		name[i]=cmdline[i];
+
+	}
+	name[i]=0;
+	finfo=file_search(name ,(strcut FILENFO *)(ADR_DISKIMG+0x002600),224);
+	if(finfo==0&&name[i-1]!='.'){
+		//由于找不到文件所以在文价名后自动添加扩展名hrb进行查找
+		name[i]='.';
+		name[i+1]='H';
+		name[i+2]='R';
+		name[i+3]='B';
+		name[i+4]=0;
+		finfo=file_search(name,(struct FILENFO *)(ADR_DISKIMG+0x002600),224);
+	}
+	if(finfo!=){
+	//找到文件
+	p=(char *)memman_alloc_4k(memman,finfo->size);
+	file_loadfile(finfo->clustno,finfo->size,p,fat,(char *)(ADR_DISKIMG+0x003e00));
+	set_segdesc(gdt+1003,finfo->size-1,(int)p,AR_CODE32_ER);
+	farcall(0,1003*8);
+	memman_free_4k(memman,(int)p,finfo->size);
+	cons_line(cons);
+	return  1;
+
+	}
+	return 0;
+}
+
+
+然后程序进阶我们让其能显示连续的字符串
+一般来说显示有两种：显示一串字符并在遇到字符编码0时终止，其次可以指定好显示那一串字符，然后进行显示
+
+void cons_putstr0(struct CONSOLE *cons,char *s){
+	for(;*s!=0;s++){
+		cons_putchar(cons,*s,1);
+
+	}
+	return;
+}
+
+void cons_putstr1(strcut CONSOLE *cons,char *s,int l){
+	int i;
+	for(i=0;i<1;i++){
+		cons_putchar(cons,s[i],1);
+	}
+	return;
+}
+
+
+仿照BIOS调用的方式我们扩充INF号，使得每一个INT都可以调用不同的函数
+
+功能号1   显示单个字符（AL=字符编码
+功能号2   显示字符串0（EBX=字符串地址
+功能号3   显示字符串1（EBX=字符串地址，ECX字符串长度
+然后改写原来的中间函数
+_asn_hrb_api:
+	STI
+	PUSHAD    ;用于保存寄存器值
+
+	PUSCHAD   ;用于向hrb_api传值
+	CALL  _hrb_api
+	ADD   ESP,32
+	POPAD
+	IRETD
+
+在console.c中改写API处理程序
+void hrb_api(int edi,int ebp,int esp,int ebx,int ecx,int eax){
+	struct CONSOLE *cons=(strcut CONSOLE *)*((int *)0x0fec);
+	if(edx==1){
+		cons_putchar(cons,eax&0xff,1);
+
+	}elif(edx==2){
+		cons_putstr0(cons,(char *)ebx);
+	}elif(edx==3){
+		cons_putstr1(cons,(char *)ebx,ecx);
+	}
+	return;
+}
+
+最后改一下INT 0x40调用_asm_hrb_api
+
+
+写一个新的程序使用我们设计好的合一大部分东西
+
+
+最后我们试图在程序中添加hello.nas
+[INSTRSET 'i486p']
+[BITS 32]
+	MOV 	ECX,msg
+	MOX 	EDX,1
+putloop:
+	MOV 	AL,[CS:ECX]
+	CMP 	AL,0
+	JE 		fin
+	INT 	0x40
+	ADD 	ECX,1
+	JMP 	putloop
+fin:
+	RETF
+msg:
+	DB 'hello',0
+
