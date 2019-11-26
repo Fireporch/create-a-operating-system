@@ -1,0 +1,171 @@
+day21
+
+操作系统保护
+前面通过在nas中用汇编语言写了一个能通过C语言调用汇编语言的函数，从而实现程序的实现，而且成功通过程序在命令行实现一串字符的打印今天我们来简化一下
+
+
+首先要实现C语言编写的应用程序需要在程序方面创建一个api_putchar这个函数能向EDX与AL赋值并调用INT 0x40
+在a_nask.nas中实现
+[FORMAT 'WCOFF']	;生成对象文件的模式
+[INSTRSET 'i486p']	;表示使用486兼容指令集
+[BITS 32]			;生成32位模式机器语言
+[FILE 'a_nask.nas']	;源文件名信息
+
+		GLOBAL _api_putchar
+[SECTION .text]
+_api_putchar: 	;void api_putchar(int c);
+		MOV EDX,1
+		MOV AL,[ESP+4]	;c
+		INT 0x40
+		RET
+这里的api_putchar需要与a.c的编译结果向连接因此使用对象文件模式
+
+而且要修改一下文件的格式只读模式是无法写入的，因此要讲文件开头换为
+E8 16 00 00 00 CB
+然后就可以通过C语言实现应用程序的编译了
+然后编写hello3.c
+void api_putchar(int c);
+
+void HairMain(void){
+	api_putchar('h');
+	api_putchar('e');
+	api_putchar('l');
+	api_putchar('l');
+	api_putchar('o');
+	api_putchar('!');
+	return;
+}
+这个程序即使用了api_putchar也使用了a_nask.obj因此makefile要改
+hello3.bim :hello3.obj a_nask.obj Makefile
+	$(OBJ2BIM) @$(RULEFILE) out:hello3.bim map:hello3.map hello.obj a_nask.obj
+
+
+hello3.hrb :hello3.bim Makefile
+	$(BIM2HRB) hello3.bim hello3.hrb 0
+
+但是同理每次都要修改文件类型的话麻烦因此我们在执行程序的判定中增加对文件类型的16进制程序修改那6个字符
+
+在console.c中
+int cmd_app(){
+	...
+	if(找到文件){
+
+
+
+		if(finfo->size>=8 && strncmp(p+4,'hari',4)==0){
+		p[0]=0xe8;
+		p[1]=0x16;
+		p[2]=0x00;
+		p[3]=0x00;
+		p[4]=0x00;
+		p[5]=0xcb;
+		}
+	}
+}
+这样既可通过nas中定义好的函数在C语言中调用实现程序对字符的打印
+
+然后我们开始谈一下对于操作系统的保护
+软件的bug等错误可能造成操作系统的破坏，一个操作程序应该能对程序中可能出现的各种bug与病毒做到屏蔽与保护操作系统的能力
+
+首先我们写一个病毒
+crack1.c
+void HairMain(void ){
+	*((char *)0x00102600)=0;
+	return;
+}
+
+
+他所造成的影响在于擅自访问了本该有操作管理的内存空间，因此我们应该对应用程序创造一块专属于他的内存空间并在程序运行期间不允许访问未经授权的部分
+
+将DS与SS指向该段内存地址
+
+操作系统使用的代码段   2*8
+操作系统使用的数据段   1*8
+应用程序使用的代码段   1003*8
+应用程序使用的数据段   1004*8
+(3*8 -- 1002*8位tss使用的段)
+
+
+我们先为程序使用内存空间分配为64kb
+在使用app指令之前定义
+console.c
+int cmd_app(){
+	if(找到文件){
+		set_segmdesc(gdt+1004,64*1024-1,(int)q,AR_DATA32_RW);
+		start_app(0,1003*8,64*1024,1004*8);
+		memman_free_4k(memman,(int)q,64*1024);
+	}
+}
+
+我们在程序执行前加上一个far-CALL 接下来试着ESP与DS。SS
+
+在naskfun中设置
+_start_app:
+	PUSHAD ;
+	MOV EAX,[ESP+36]
+	MOV ECX,[ESP+40]
+	MOV EDX,[ESP+44]
+	MOV EBX,[ESP+48]
+	MOV [0xfe4],ESP
+	CLI
+	MOV ES,BX
+	MOV SS,BX
+	MOV DS,BX
+	MOV FS,BX
+	MOV GS,BX
+	MOV GS,BX
+	MOV ESP,EDX
+	STI
+	PUSH ECX
+	PUSH EAX
+	CALL FAR[ESP]
+
+	MOV EAX,1*8
+	CLI
+	MOV ES,AX
+	MOV SS,AX
+	MOV DS,AX
+	MOV GS,AX
+	MOV FS,AX
+	MOV ESP,[0xfe4]
+	STI  	
+	POAD 
+	RET
+
+	而且还要修改asm_hrb_api将操作系统的段地址设回去
+	而且在应用程序运行也会中断，中断就是inthandler
+	
+然后我们写一个intahndeler0d
+int inthandler0d(int *esp){
+	struct CONSOLE *cons=(struct CONSOLE *) *((int *)0x0fec);
+	cons_putstr0(cons ,'$nInt 0D :$n General Proected Exception .$n');
+	return 1；//强制结束程序
+}
+
+这个函数为了对不是有应用程序的bug与破坏行为进行的错误处理，异常会有INT 0x0d以外的中断来处理
+
+设定以上保护即可使应用程序对内存修改权限处理，应用程序的异常输入即可保护
+
+还有一种bug可以指定应用程序用的DS，一起异常
+
+比如crack2.nas
+[INSTRSET 'i486p']
+[BITS 32]
+	MOV EAX,1*8
+	MOV DS,AX
+	MOV BYTE [0x102600],0
+	RETF
+
+这段程序是因为应用程序擅自向DS存入了操作系统用的段地址
+在短地址定义的地方，如果访问权限设定为0x60凑在哦系统就会默认其正在运行的程序，这时如果存入操作系统一段短地址，就会产生异常
+
+int cmd_app(strcut CONSOLE *cons,int *fat,char *cmdline){
+	..
+	struct TASK *task =task_now();
+
+	..
+	set_segdesc(gdt+1003,finfo->size-1,(int)p,AR_CODE32_ER+0x60);
+	start_app(0,1003*8,64*1024,2004*8,&(task->tss.esp0));
+	...
+}
+这次我们运行的操作系统会向cpu输入我们需要运行的一段应用程序的段地址
