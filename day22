@@ -1,0 +1,172 @@
+day22
+
+
+前面已经将程序运行中可能对系统造成的影响做了调整，保护操作系统在程序运行时不能对程序的内存其他数据破坏修改
+
+还有一种破坏情况：程序在定时器的影响，时操作与切换异常缓慢
+[INSTRSET 'i486p']
+[BITS 32 ]
+	MOV AL,0x34
+	OUT 0x43,AL
+	MOV AL,0xff
+	OUT 0x40,AL
+	MOV AL,0xFF
+	OUT 0x40,AL
+
+;上述操作与下面的操作相当
+;io_out8(PIT_CTRL,0x34);
+;io_out8(PIT_CTRL,0xff);
+;io_out8(PIT_CTRL,0xff);
+
+	MOV EDX,4
+	INT 0x40
+当以应用程序模式运行时，执行IN指令与OUT指令都会产生一般性异常，
+除非设置CPU否则不会允许其进行in与out指令
+
+那执行CLI之后执行HLT程序就会死机这样的应用程序如何规避呢
+当以应用程序模式运行时，执行CLI与HLT都会产生异常但是中断时操作系管理的，应用程序不能随便控制，一般情况下，调用任务休眠程序才能调用HLT
+
+
+
+优化系统帮助发现bug
+在bug1.c中
+void api_putchar(int c);
+void api_end(void);
+
+void HairMain(void){
+	char a[100];
+	a[10]='A';
+	api_putchar(a[10]);
+	a[102]='B';//有问题
+	api_putchar(a[102]);
+	a[105]='C';//这句有问题
+	api_putchar(a[105]);
+	api_end();
+}
+以上程序编译时我们能发现问题，但是实际调试程序自动重启了
+
+上诉问题是a数组写值溢出了
+a保存在栈中，所以我们要一个函数寻找栈异常
+在naskfun.nas中编写
+_asm_inthandler0c:
+	....
+
+然后我们编写inthandler0c
+int *inthandler0c(int *esp){
+	struct CONSOLE *cons =(struct CONSOLE *)*((int *)0x0fec);
+	strcut TASK *task=task_now();
+	cons_putstr0(cons,'.....')
+	return &(task->tss.esp0);
+}
+这次再运行可以显示ab但是对c判定异常了
+因为程序对a分配的空间可以接受到本不在定义范围内的102，但是105明显超过了，所以可以被判定出来
+
+要让程序发现bug最好是能直到引发异常的指令的地址
+这次再inthandler中加入
+char s[30];
+sprintf(s,'EIP=%08X￥n',esp[11]);
+cons_putstr0(cons,s);
+
+上面代码功能是能将esp的11号元素（EIP)显示出来
+这次bug1中报错是EIP=00000042
+因此可以确定cpu能对bug做出反应
+
+
+再设定一个bug
+bug2
+void HairMain(void){
+	for(;;){ }
+}
+这个程序什么都不做但是会让循环一直进行无法接受，中断没有被禁用，因此其他程序可以继续运行但是cpu一定会为证后台程序持续好点
+
+我们为程序设定一个强制结束的功能
+将某个按键设定为强制结束建，按下之后程序强制结束
+bootpack.c中用组合建 Shift+F1设定为强制结束建
+void HairMain(void){
+	..
+
+	if(256<=i&&i<=511){
+		//键盘数据
+		if(i==256+0x3b&&key_shift !=0&&task_cons->tss.ss0 !=){
+			cons=(struct CONSOLE *)*((int *) 0x0fec);
+			cons_putstr0(cons);//将程序中的'￥n替换为\n'
+			io_cil();
+			task_cons->tss.eax =(int ) &(task_cons->tss.esp0);
+			task_cons->tss.eip=(int )asm_end_app;
+			io_sti();
+		}
+	}
+}
+
+asm_app_end时将naskfun中的end_app改名来的函数
+原理是摁下强制结束见后，改写命令行窗口任务的寄存器值，并goto到asm_end_app中
+
+但是强制结束的前提是当前有任务运行，没有运行时为误操作因此还是单独在程序中定义一个end函数
+而且执行强制结束前判定 task_cons->tss.ss0不为0
+
+
+
+接下来使用程序创造窗口
+EDX=5
+EBX=窗口缓冲区
+ESI=窗口在x轴方向的大小
+EDI=窗口在y轴方向的大小
+EAX=透明色
+ECX=窗口名称
+
+返回值
+EAX=用于操作窗口的句柄
+
+
+但是我们没有考虑调用api之后将值存入寄存器并返回给应用程序
+编写一个这个就是跟之前在操作系统的HairMain中的基本思路差不多但是对api存入的值对操作系统的底层函数中设定的值做一些调整
+
+
+
+最后要使这个窗口能实现字符与字框的显示
+
+显示字符的api如下
+EDX =6
+EBX =窗口句柄
+ESI=显示位置x坐标
+EDI=显示位置y坐标
+EAX=色号
+ECX=字符串长度
+EBP=字符串
+
+描述如下
+EDX=7
+EBX=窗口句柄
+EAX=x0
+ECX=y0
+ESI=x1
+EDI=y1
+EBP=色号
+
+而以上这段内容是在console中的hrb_api中对edx的初始化
+定义好之后我们在winhelo中直接调用即可
+
+
+int api_openwin(char *buf,int xsiz,int ysiz,int col_inv,char *title);
+void api_putstrwin(int win ,int x,int y,int col,int len,char *str);
+void api_boxfilwin(int win,int x0,int y0,int x1,int y1,int col);
+void api_end(void);
+
+
+char buf[150*50];
+
+void HairMain(void){
+	int win;
+	win=api_openwin(buf,150,50,-1,'hello');
+	api_boxfiwin(win,8,36,141,43,3);
+	api_putstrwin(win,28,28,0,12,'hello,world');
+	api_end();
+}
+
+
+
+之后呢根据程序可能做得各种任务扩充了比如听音乐，小游戏（这个真的是简单
+录入图片及对文本文件的编写做了调整，所以最后对程序整理，我们编写的os终于结束了
+
+
+end
